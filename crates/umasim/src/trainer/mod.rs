@@ -1,9 +1,10 @@
 use anyhow::Result;
+use inquire::Select;
 use log::info;
 use rand::{Rng, prelude::StdRng, seq::SliceRandom};
 
 use crate::{
-    game::{ActionEnum, BaseAction, Game, Trainer, basic::BasicGame},
+    game::{ActionEnum, BaseAction, Game, Trainer},
     gamedata::ActionValue
 };
 
@@ -16,7 +17,7 @@ impl<G: Game> Trainer<G> for RandomTrainer {
         let mut ret = 0;
         random_index.shuffle(rng);
         for i in random_index {
-            // 优先休息，会心情，训练。都不满足就随机第一个
+            // 优先休息，回心情，训练。都不满足就随机第一个
             if game.uma().vital < 45 {
                 if actions[i].as_base_action() == Some(BaseAction::Sleep) {
                     ret = i;
@@ -41,9 +42,32 @@ impl<G: Game> Trainer<G> for RandomTrainer {
         Ok(ret)
     }
 
-    fn select_choice(&self, game: &G, choices: &[ActionValue], rng: &mut StdRng) -> Result<usize> {
+    fn select_choice(&self, _game: &G, choices: &[ActionValue], rng: &mut StdRng) -> Result<usize> {
         let ret = rng.random_range(0..choices.len());
         info!("当前选项: {:?}, 随机选择选项 {}", choices, ret + 1);
         Ok(ret)
+    }
+}
+
+/// 手动训练师
+pub struct ManualTrainer;
+
+impl<G: Game> Trainer<G> for ManualTrainer {
+    fn select_action(&self, _game: &G, actions: &[<G as Game>::Action], _rng: &mut StdRng) -> Result<usize> {
+        let selected = Select::new("请选择:", actions.to_vec())
+            .with_page_size(actions.len())
+            .prompt()?;
+        actions
+            .iter()
+            .position(|x| *x == selected)
+            .ok_or_else(|| anyhow::anyhow!("未找到该动作: {selected}"))
+    }
+
+    fn select_choice(&self, _game: &G, choices: &[ActionValue], _rng: &mut StdRng) -> Result<usize> {
+        let selected = Select::new("请选择:", choices.to_vec()).prompt()?;
+        choices
+            .iter()
+            .position(|x| *x == selected)
+            .ok_or_else(|| anyhow::anyhow!("未找到该选项: {selected}"))
     }
 }

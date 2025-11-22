@@ -16,7 +16,7 @@ pub use support_card::*;
 pub use traits::*;
 pub use uma::*;
 
-use crate::{gamedata::GAMEDATA, global, utils::*};
+use crate::{gamedata::GAMEDATA, global};
 
 /// 回合阶段
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, Sequence)]

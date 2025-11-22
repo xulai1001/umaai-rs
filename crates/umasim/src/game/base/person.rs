@@ -1,6 +1,5 @@
 use std::default::Default;
 
-use colored::Colorize;
 use serde::{Deserialize, Serialize};
 
 use crate::{game::*, gamedata::GAMEDATA, global};

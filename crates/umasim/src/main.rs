@@ -7,8 +7,8 @@ use rand::{SeedableRng, rngs::StdRng};
 
 use crate::{
     game::{Game, InheritInfo, basic::BasicGame},
-    gamedata::{GAMECONSTANTS, init_global},
-    trainer::RandomTrainer,
+    gamedata::{GAMECONSTANTS, GameConfig, init_global},
+    trainer::*,
     utils::init_logger
 };
 
@@ -22,17 +22,20 @@ pub mod utils;
 async fn main() -> Result<()> {
     init_logger()?;
     init_global()?;
-    let mut game = BasicGame::newgame(101901, &[302424, 302464, 302484, 302564, 302574, 302644], InheritInfo {
-        blue_count: [15, 3, 0, 0, 0],
-        extra_count: [0, 30, 0, 0, 30, 30]
+    let config_file = fs_err::read_to_string("game_config.toml")?;
+    let game_config: GameConfig = toml::from_str(&config_file)?;
+    let mut game = BasicGame::newgame(game_config.uma as u32, &game_config.cards, InheritInfo {
+        blue_count: game_config.blue_count.clone(),
+        extra_count: game_config.extra_count.clone()
     })?;
     println!("{}", game.explain()?);
     let score = game.uma.calc_score();
     println!("评分: {} {}", global!(GAMECONSTANTS).get_rank_name(score), score);
-    let trainer = RandomTrainer {};
+    let trainer = ManualTrainer {};
     let mut rng = StdRng::from_os_rng();
     game.run_full_game(&trainer, &mut rng)?;
     info!("育成结束！");
+    println!("{}", game.explain()?);
     let score = game.uma.calc_score();
     println!(
         "评分: {} {}, PT: {}",

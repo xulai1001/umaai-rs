@@ -8,7 +8,7 @@ use anyhow::Result;
 use hashbrown::HashMap;
 use log::info;
 pub use person::*;
-use rand::{Rng, rngs::StdRng, seq::IndexedRandom};
+use rand::{rngs::StdRng, seq::IndexedRandom};
 
 use crate::{explain::Explain, game::*, gamedata::EventData, utils::*};
 
@@ -47,7 +47,7 @@ impl BaseGame {
         let mut lines = vec![];
         lines.push(format!(
             "回合: {}-{:?} 设施等级: {} 友人: {}",
-            self.turn,
+            self.turn + 1,
             self.stage,
             Explain::train_level_count(&self.train_level_count),
             self.friend.explain()
@@ -119,15 +119,14 @@ impl BaseGame {
     }
     /// 使事件生效，无交互或随机判定（训练员无法选择）。如果需要随机判定或选择，需要把事件加入unresolved_events让他在回合后调用
     pub fn apply_event(&mut self, event: &EventData, choice: usize) {
-        if event.choices.len() > 1 {
-            info!("+ 事件: #{} {}, 选项 {}", event.id, event.name, choice + 1);
-        } else {
-            info!("+ 事件: #{} {}", event.id, event.name);
-        }
         self.events.entry(event.id).and_modify(|x| *x += 1).or_insert(1);
         if !event.choices.is_empty() {
             self.uma.add_value(&event.choices[choice]);
         }
+    }
+
+    pub fn is_xiahesu(&self) -> bool {
+        (self.turn >= 36 && self.turn < 40) || (self.turn >= 60 && self.turn < 64)
     }
 }
 

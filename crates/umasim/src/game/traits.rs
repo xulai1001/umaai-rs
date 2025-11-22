@@ -1,7 +1,6 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 
 use anyhow::{Result, anyhow};
-use hashbrown::HashMap;
 use log::{info, warn};
 use rand::{Rng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -10,8 +9,7 @@ use super::PersonType;
 use crate::{
     game::{BaseAction, CardTrainingEffect, SupportCard, Uma},
     gamedata::{ActionValue, EventData, GAMECONSTANTS},
-    global,
-    utils::Array5
+    global
 };
 // Game为核心特性，
 // ActionEnum 执行动作，修改Game状态
@@ -50,7 +48,7 @@ pub trait Person: Debug + Clone + PartialEq + Default {
 }
 
 /// 会改变Game状态的主动选项
-pub trait ActionEnum: Debug + Clone {
+pub trait ActionEnum: Debug + Display + Clone + PartialEq {
     /// 操作的对象类型，不一定要实现Game Trait
     type Game;
 
@@ -93,6 +91,7 @@ pub trait Game: Clone {
     fn apply_event(&mut self, event: &EventData, choice: usize, rng: &mut StdRng) -> Result<()>;
     /// 执行事件，如果有选项，交给Trainer去决定
     fn run_event<T: Trainer<Self>>(&mut self, event: &EventData, trainer: &T, rng: &mut StdRng) -> Result<()> {
+        info!("+ 事件: #{} {}", event.id, event.name);
         if event.choices.len() > 1 {
             let selection = if let Some(probs) = &event.random_choice_prob {
                 // 随机选择选项

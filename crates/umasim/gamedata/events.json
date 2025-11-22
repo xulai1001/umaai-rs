@@ -46,6 +46,28 @@
             ]           
         },
         {
+            "id": 4012,
+            "name": "第二年继承",
+            "start_turn": 30,
+            "end_turn": 30,
+            "prob": 100,
+            "max_trigger_time": 1,
+            "choices": [{
+                "status_pt": [ 0, 0, 0, 0, 0, 0 ]
+            }]
+        },
+        {
+            "id": 4013,
+            "name": "第三年继承",
+            "start_turn": 54,
+            "end_turn": 54,
+            "prob": 100,
+            "max_trigger_time": 1,
+            "choices": [{
+                "status_pt": [ 0, 0, 0, 0, 0, 0 ]
+            }]
+        },
+        {
             "id": 400012005,
             "name": "1年目　大盛況！",
             "start_turn": 24,

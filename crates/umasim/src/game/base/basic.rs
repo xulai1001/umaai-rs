@@ -1,12 +1,13 @@
 //! 基础（无剧本）游戏，用于测试特性
 
-use std::ops::{Deref, DerefMut};
+use std::{
+    fmt::Display,
+    ops::{Deref, DerefMut}
+};
 
-use anyhow::Result;
-use colored::Colorize;
-use comfy_table::{ColumnConstraint, ContentArrangement, Table, Width};
+use anyhow::{Result, anyhow};
+use comfy_table::{ColumnConstraint, Table, Width};
 use enum_iterator::Sequence;
-use hashbrown::HashMap;
 use log::{info, warn};
 use rand::{Rng, rngs::StdRng, seq::IndexedRandom};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -26,7 +27,7 @@ use crate::{
     },
     gamedata::*,
     global,
-    utils::{global_events, system_event, system_event_prob}
+    utils::{AttributeArray, global_events, system_event, system_event_prob}
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,6 +37,12 @@ impl Deref for BasicAction {
     type Target = BaseAction;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl Display for BasicAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -56,6 +63,10 @@ impl ActionEnum for BasicAction {
 
 impl BasicAction {
     pub fn do_train(&self, game: &mut BasicGame, train: usize, rng: &mut StdRng) -> Result<()> {
+        // sanity check
+        if train >= 5 {
+            return Err(anyhow!("训练等级越界: {train}"));
+        }
         info!(
             ">> {}训练 等级 {}",
             global!(GAMECONSTANTS).train_names[train],
@@ -116,7 +127,7 @@ impl BasicAction {
                 game.unresolved_events.push(hint_event);
             }
             let extra_train_prob = system_event_prob("extra_train")?;
-            if rng.random_bool(extra_train_prob as f64) {
+            if !game.is_xiahesu() && rng.random_bool(extra_train_prob as f64) {
                 game.unresolved_events.push(EventData::extra_training_event(train));
             }
             // 更新友人状态
@@ -168,10 +179,6 @@ impl DerefMut for BasicGame {
 }
 
 impl BasicGame {
-    pub fn is_xiahesu(&self) -> bool {
-        (self.turn >= 36 && self.turn < 40) || (self.turn >= 60 && self.turn < 64)
-    }
-
     pub fn add_person(&mut self, mut person: BasePerson) {
         info!("新训练角色: {}", person.explain());
         person.person_index = self.persons.len() as i32;
@@ -277,7 +284,7 @@ impl Game for BasicGame {
         let mut events = vec![];
         let no_event_turns = &global!(GAMECONSTANTS).no_event_turns;
         // 剧本事件
-        let mut story_events = global_events()
+        let story_events = global_events()
             .story_events
             .iter()
             .filter_map(|e| {
@@ -363,6 +370,8 @@ impl Game for BasicGame {
         //info!("-- Turn {}-{:?} --", self.turn, self.stage);
         match self.stage {
             TurnStage::Begin => {
+                println!("-----------------------------------------");
+                info!("{}", self.explain()?);
                 let mut events = self.generate_events(rng);
                 // 友人强制事件
                 if self.friend.out_state == FriendOutState::AfterUnlock {
@@ -392,7 +401,6 @@ impl Game for BasicGame {
                 } else {
                     self.distribute_all(rng)?;
                     self.distribute_hint(rng)?;
-                    info!("当前状态: {}", self.explain()?);
                     info!("训练:\n{}", self.explain_distribution()?);
                 }
             }
@@ -423,6 +431,16 @@ impl Game for BasicGame {
         }
         // 判断特殊事件
         match event.id {
+            4012 | 4013 => {
+                // 继承
+                let inherit_value = ActionValue {
+                    status_pt: self.inherit.inherit(rng),
+                    ..Default::default()
+                };
+                let inherit_limit = self.inherit.inherit_limit(rng);
+                self.uma.add_value(&inherit_value);
+                self.uma.five_status_limit.add_eq(&inherit_limit);
+            }
             5007 => {
                 // 大成功事件
                 if rng.random_bool(system_event_prob("qiezhe_normal")?) {
@@ -526,7 +544,7 @@ impl Game for BasicGame {
         if self.is_xiahesu() {
             5
         } else {
-            self.train_level_count[train] as usize / 4 + 1
+            (self.train_level_count[train] as usize / 4 + 1).min(5).max(1)
         }
     }
 }

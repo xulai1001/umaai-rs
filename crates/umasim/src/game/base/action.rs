@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use anyhow::{Result, anyhow};
 use rand::{Rng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
@@ -24,11 +26,24 @@ pub enum BaseAction {
     Clinic
 }
 
+impl Display for BaseAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BaseAction::Train(x) => write!(f, "{}训练", global!(GAMECONSTANTS).train_names[*x as usize]),
+            BaseAction::Race => write!(f, "比赛"),
+            BaseAction::Sleep => write!(f, "休息"),
+            BaseAction::FriendOuting => write!(f, "友人出行"),
+            BaseAction::NormalOuting => write!(f, "普通出行"),
+            BaseAction::Clinic => write!(f, "治病")
+        }
+    }
+}
+
 // 具体的操作都是 &Game -> Result<Game>的映射，产生一个新Game对象
 // 在具体类型中可以直接调用BaseAction的方法得到BaseGame的变换，然后再把结果转为自己的Game类型
 // 但是do_train需要具体类型自己实现，因为BaseGame没有实现Game Trait，不能使用Game Trait里计算训练数值的方法
 impl BaseAction {
-    pub fn do_race(game: &mut BaseGame, rng: &mut StdRng) -> Result<()> {
+    pub fn do_race(game: &mut BaseGame, _rng: &mut StdRng) -> Result<()> {
         let race_bonus = (100 + game.uma.race_bonus) as f32 / 100.0;
         if game.uma.is_race_turn(game.turn)? {
             info!(">> 生涯比赛 - 比赛加成: {}", game.uma.race_bonus);
@@ -49,23 +64,32 @@ impl BaseAction {
     }
 
     pub fn do_sleep(game: &mut BaseGame, rng: &mut StdRng) -> Result<()> {
-        let weights = WeightedIndex::new(&global!(GAMECONSTANTS).rest_probs)?;
-        let mut value = ActionValue::default();
-        match weights.sample(rng) {
-            0 => {
-                info!(">> 休息 - 寝不足");
-                value.vital = 30;
-                game.uma.add_value(&value);
-            }
-            1 => {
-                info!(">> 休息 - 正常");
-                value.vital = 50;
-                game.uma.add_value(&value);
-            }
-            _ => {
-                info!(">> 休息 - 大成功");
-                value.vital = 70;
-                game.uma.add_value(&value);
+        if game.is_xiahesu() {
+            let value = ActionValue {
+                vital: 40,
+                motivation: 1,
+                ..Default::default()
+            };
+            game.uma.add_value(&value);
+        } else {
+            let weights = WeightedIndex::new(&global!(GAMECONSTANTS).rest_probs)?;
+            let mut value = ActionValue::default();
+            match weights.sample(rng) {
+                0 => {
+                    info!(">> 休息 - 寝不足");
+                    value.vital = 30;
+                    game.uma.add_value(&value);
+                }
+                1 => {
+                    info!(">> 休息 - 正常");
+                    value.vital = 50;
+                    game.uma.add_value(&value);
+                }
+                _ => {
+                    info!(">> 休息 - 大成功");
+                    value.vital = 70;
+                    game.uma.add_value(&value);
+                }
             }
         }
         Ok(())

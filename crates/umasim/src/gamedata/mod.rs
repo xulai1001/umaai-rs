@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{collections::BTreeMap, fmt::Display, sync::OnceLock};
 
 use anyhow::{Result, anyhow};
 use hashbrown::HashMap;
@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     explain::Explain,
-    game::TurnStage,
     global,
     utils::{Array5, Array6}
 };
@@ -190,6 +189,12 @@ impl ActionValue {
             self.status_pt[i] = f(self.status_pt[i]);
         }
         self
+    }
+}
+
+impl Display for ActionValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.explain())
     }
 }
 
@@ -404,6 +409,19 @@ impl GameConstants {
         ret.push(1.0 - ret[0] - ret[1] - ret[2]);
         ret
     }
+}
+
+/// 运行配置（临时）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GameConfig {
+    /// 马娘ID
+    pub uma: u32,
+    /// 卡组（ID，突破等级）
+    pub cards: [u32; 6],
+    /// 种马蓝因子个数
+    pub blue_count: Array5,
+    /// 种马额外属性
+    pub extra_count: Array6
 }
 
 #[cfg(test)]
