@@ -109,9 +109,31 @@ pub trait Game: Clone {
             self.apply_event(&event, 0, rng)
         }
     }
+    /// provided: 列出本回合触发的事件
+    fn list_turn_events(&self, events: &[EventData]) -> Vec<EventData> {
+        events
+            .iter()
+            .filter_map(|e| {
+                if e.start_turn == self.turn() {
+                    Some(e.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
     /// provided: 执行指定动作
     fn apply_action(&mut self, action: &Self::Action, rng: &mut StdRng) -> Result<()> {
         action.apply(self, rng)
+    }
+    /// provided: 列出动作，交给训练员判定并执行
+    fn list_and_apply_action<T: Trainer<Self>>(&mut self, trainer: &T, rng: &mut StdRng) -> Result<()> {
+        let actions = self.list_actions()?;
+        if !actions.is_empty() {
+            let selection = trainer.select_action(self, &actions, rng)?;
+            self.apply_action(&actions[selection], rng)?;
+        }
+        Ok(())
     }
     // 人头分配相关
     /// persons getter
@@ -271,6 +293,11 @@ pub trait Game: Clone {
     fn deck(&self) -> &Vec<SupportCard>;
     /// provided: 计算来自支援卡的训练buff
     fn calc_training_buff(&self, train: usize) -> Result<CardTrainingEffect> {
+        self.default_calc_training_buff(train)
+    }
+
+    /// 如果calc_training_buff被重写，仍然可以调用这里的默认方法
+    fn default_calc_training_buff(&self, train: usize) -> Result<CardTrainingEffect> {
         let mut ret = CardTrainingEffect::default();
         if train >= 5 {
             return Err(anyhow!("训练类型错误: {train}"));
@@ -287,8 +314,13 @@ pub trait Game: Clone {
         }
         Ok(ret)
     }
-    /// provided: 计算训练属性
+
+    /// 可重写: 计算训练属性
     fn calc_training_value(&self, buffs: &CardTrainingEffect, train: usize) -> Result<ActionValue> {
+        self.default_calc_training_value(buffs, train)
+    }
+    /// provided: 计算训练属性
+    fn default_calc_training_value(&self, buffs: &CardTrainingEffect, train: usize) -> Result<ActionValue> {
         let cons = global!(GAMECONSTANTS);
         let train_level = self.train_level(train) - 1; // 返回1-5处理成0-4
         if train >= 5 {
@@ -322,7 +354,7 @@ pub trait Game: Clone {
                     * (1.0 + 0.01 * buffs.xunlian as f32)
                     * (1.0 + 0.05 * person_count as f32)
                     * (1.0 + 0.01 * status_bonus[i] as f32);
-                ret.status_pt[i] = real_value.floor() as i32;
+                ret.status_pt[i] = (real_value.floor() as i32);
                 //warn!("Train: {train}, i: {i}, real: {real_value}, ret: {}", ret.status_pt[i]);
             }
         }

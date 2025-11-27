@@ -103,6 +103,11 @@ impl Uma {
         global!(GAMEDATA).get_uma(self.uma_id)
     }
 
+    /// 角色ID（高4位）
+    pub fn chara_id(&self) -> u32 {
+        self.uma_id / 100
+    }
+
     pub fn explain(&self) -> Result<String> {
         let data = self.get_data()?;
         let ret = format!(

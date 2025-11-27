@@ -11,6 +11,8 @@ use crate::{
     utils::{Array5, Array6}
 };
 
+pub mod onsen;
+
 /// 自由比赛区间数据
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -271,19 +273,6 @@ impl EventData {
         ret.choices[0].status_pt[train] = 5;
         ret
     }
-}
-
-/// 剧本状态
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScenarioData {
-    /// 剧本ID
-    pub scenario_id: u32,
-    /// 最大回合数
-    pub max_turn: u32,
-    /// 剧本事件
-    pub story_events: Vec<EventData>,
-    /// 链接角色 chara_id
-    pub link_charas: Vec<u32>
 }
 
 /// 事件数据表

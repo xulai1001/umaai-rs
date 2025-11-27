@@ -1,11 +1,12 @@
 pub mod base;
 pub mod inherit;
+pub mod onsen;
 pub mod simulator;
 pub mod support_card;
 pub mod traits;
 pub mod uma;
 
-use std::default::Default;
+use std::{default::Default, fmt::Display};
 
 use anyhow::Result;
 pub use base::*;
@@ -68,6 +69,16 @@ pub enum FriendCardState {
     SSR,
     /// 1星友人
     R
+}
+
+impl Display for FriendCardState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Empty => write!(f, "没带"),
+            Self::SSR => write!(f, "SSR"),
+            Self::R => write!(f, "R")
+        }
+    }
 }
 
 /// 友人出行阶段

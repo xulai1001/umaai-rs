@@ -53,7 +53,6 @@ impl BaseGame {
             self.friend.explain()
         ));
         lines.push(self.uma.explain()?);
-        // 人头，人头分布 TODO
         Ok(lines.join("\n"))
     }
 
@@ -127,6 +126,32 @@ impl BaseGame {
 
     pub fn is_xiahesu(&self) -> bool {
         (self.turn >= 36 && self.turn < 40) || (self.turn >= 60 && self.turn < 64)
+    }
+
+    pub fn generate_card_event(&self, person_index: i32, rng: &mut StdRng) -> Option<EventData> {
+        // 支援卡事件. 再精细一点模拟 后一段事件发生次数不能多于前一段事件
+        let card_event_times: Vec<_> = vec![8001, 8002, 8003]
+            .iter()
+            .map(|x| *self.events.get(x).unwrap_or(&0))
+            .collect();
+        let mut available_events = vec![];
+        if card_event_times[0] < 5 {
+            available_events.push(0);
+        }
+        if card_event_times[1] < card_event_times[0] {
+            available_events.push(1);
+        }
+        if card_event_times[2] < card_event_times[1] {
+            available_events.push(2);
+        }
+        if let Some(index) = available_events.choose(rng) {
+            let mut event = global_events().card_events[*index].clone();
+
+            event.person_index = Some(person_index);
+            Some(event)
+        } else {
+            None
+        }
     }
 }
 

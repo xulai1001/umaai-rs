@@ -12,14 +12,6 @@
             }]
         },
         {
-            "id": 400012001,
-            "name": "温泉杯开始",
-            "start_turn": 2,
-            "end_turn": 2,
-            "prob": 100,
-            "max_trigger_time": 1           
-        },
-        {
             "id": 4009,
             "name": "经典年-新年",
             "start_turn": 24,
@@ -65,53 +57,6 @@
             "max_trigger_time": 1,
             "choices": [{
                 "status_pt": [ 0, 0, 0, 0, 0, 0 ]
-            }]
-        },
-        {
-            "id": 400012005,
-            "name": "1年目　大盛況！",
-            "start_turn": 24,
-            "end_turn": 24,
-            "prob": 100,
-            "max_trigger_time": 1,
-            "choices": [{
-                "status_pt": [ 10, 10, 10, 10, 10, 150 ]
-            }]
-        },
-        {
-            "id": 400012011,
-            "name": "2年目　大盛況！",
-            "start_turn": 48,
-            "end_turn": 48,
-            "prob": 100,
-            "max_trigger_time": 1,
-            "choices": [{
-                "status_pt": [ 30, 30, 30, 30, 30, 200 ],
-                "hint_level": 1
-            }]
-        },
-        {
-            "id": 400012017,
-            "name": "3年目　千客万来！！",
-            "start_turn": 72,
-            "end_turn": 72,
-            "prob": 100,
-            "max_trigger_time": 1,
-            "choices": [{
-                "status_pt": [ 40, 40, 40, 40, 40, 300 ],
-                "hint_level": 6
-            }]
-        },
-        {
-            "id": 400012021,
-            "name": "ぴょいや！大宴会！",
-            "start_turn": 78,
-            "end_turn": 78,
-            "prob": 100,
-            "max_trigger_time": 1,
-            "choices": [{
-                "status_pt": [ 40, 40, 40, 40, 40, 250 ],
-                "hint_level": 6
             }]
         }
     ],
@@ -651,7 +596,7 @@
         },
         "ticket": {
             "id": 4011,
-            "name": "抽签",
+            "name": "新年抽签",
             "start_turn": -1,
             "end_turn": -1,
             "prob": 100,
