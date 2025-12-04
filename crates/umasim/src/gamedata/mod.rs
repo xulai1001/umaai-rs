@@ -403,6 +403,15 @@ impl GameConstants {
 /// 运行配置（临时）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameConfig {
+    /// 剧本类型: "basic" | "onsen"
+    #[serde(default = "default_scenario")]
+    pub scenario: String,
+    /// 日志级别: "debug" (完整显示) | "off" (全部关闭)
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+    /// 训练员类型: "manual" (手动选择) | "random" (猴子训练员)
+    #[serde(default = "default_trainer")]
+    pub trainer: String,
     /// 马娘ID
     pub uma: u32,
     /// 卡组（ID，突破等级）
@@ -411,6 +420,18 @@ pub struct GameConfig {
     pub blue_count: Array5,
     /// 种马额外属性
     pub extra_count: Array6
+}
+
+fn default_scenario() -> String {
+    "basic".to_string()
+}
+
+fn default_log_level() -> String {
+    "debug".to_string()
+}
+
+fn default_trainer() -> String {
+    "manual".to_string()
 }
 
 #[cfg(test)]
@@ -441,7 +462,7 @@ mod tests {
 
     #[test]
     fn test_consts() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         let consts = GameConstants::load()?;
         println!("{:?}", consts);
 
@@ -456,5 +477,6 @@ pub static GAMECONSTANTS: OnceLock<GameConstants> = OnceLock::new();
 pub fn init_global() -> Result<()> {
     GAMEDATA.set(GameData::load()?).expect("global gamedata");
     GAMECONSTANTS.set(GameConstants::load()?).expect("global constants");
+    onsen::init_onsen_data()?;
     Ok(())
 }

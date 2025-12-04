@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_friend() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
         let friend = FriendState::new(Some(302574), 3)?;
         println!("{friend:#?} {}", friend.explain());

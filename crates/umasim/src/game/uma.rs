@@ -149,7 +149,7 @@ impl Uma {
 
     /// 计算技能点和总Hint等级换算得到的总pt数，不包括已学习的技能
     pub fn total_pt(&self) -> i32 {
-        (self.skill_pt as f32 + self.total_hints as f32 * global!(GAMECONSTANTS).pt_score_rate).floor() as i32
+        (self.skill_pt as f32 + self.total_hints as f32 * global!(GAMECONSTANTS).hint_pt_rate).floor() as i32
     }
 
     pub fn calc_score(&self) -> i32 {
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_uma() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
 
         let uma = Uma::new(101901)?;

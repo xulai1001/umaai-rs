@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn test_explain() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
         let mut game = BaseGame::default();
         game.uma.uma_id = 101901;
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn test_newgame() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
         let game = BaseGame::new(101901, &[302424, 302464, 302484, 302564, 302574, 302644], InheritInfo {
             blue_count: [15, 3, 0, 0, 0],

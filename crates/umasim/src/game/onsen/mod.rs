@@ -31,7 +31,10 @@ pub struct BathingInfo {
     /// buff是否超回复
     pub is_super: bool,
     /// 下一个buff是否超回复
-    pub is_super_ready: bool
+    pub is_super_ready: bool,
+    /// 秘汤汤驹效果：追加训练的支援卡索引（在温泉buff激活期间生效）
+    #[serde(default)]
+    pub extra_support_indices: Vec<usize>
 }
 
 impl BathingInfo {

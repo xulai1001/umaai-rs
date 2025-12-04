@@ -80,6 +80,13 @@ pub trait Game: Clone {
         while self.next() {
             self.run_stage(trainer, rng)?;
         }
+        // 触发育成结束奖励
+        self.on_simulation_end(trainer, rng)?;
+        Ok(())
+    }
+    /// 育成结束时的处理（如最终奖励）
+    /// 默认实现为空，由具体剧本覆盖
+    fn on_simulation_end<T: Trainer<Self>>(&mut self, _trainer: &T, _rng: &mut StdRng) -> Result<()> {
         Ok(())
     }
     // 动作相关
@@ -354,7 +361,7 @@ pub trait Game: Clone {
                     * (1.0 + 0.01 * buffs.xunlian as f32)
                     * (1.0 + 0.05 * person_count as f32)
                     * (1.0 + 0.01 * status_bonus[i] as f32);
-                ret.status_pt[i] = (real_value.floor() as i32);
+                ret.status_pt[i] = real_value.floor() as i32;
                 //warn!("Train: {train}, i: {i}, real: {real_value}, ret: {}", ret.status_pt[i]);
             }
         }
@@ -401,4 +408,17 @@ pub trait Trainer<G: Game> {
     fn select_action(&self, game: &G, actions: &[<G as Game>::Action], rng: &mut StdRng) -> Result<usize>;
     /// 选择事件选项
     fn select_choice(&self, game: &G, choices: &[ActionValue], rng: &mut StdRng) -> Result<usize>;
+    /// 选择装备升级
+    /// 
+    /// # 参数
+    /// - `game`: 当前游戏状态
+    /// - `options`: 可选装备选项的描述列表
+    /// - `rng`: 随机数生成器
+    /// 
+    /// # 返回
+    /// 选择的装备索引
+    fn select_equipment_upgrade(&self, _game: &G, _options: &[String], _rng: &mut StdRng) -> Result<usize> {
+        // 默认选择第一个
+        Ok(0)
+    }
 }

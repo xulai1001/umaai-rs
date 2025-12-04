@@ -70,4 +70,14 @@ impl<G: Game> Trainer<G> for ManualTrainer {
             .position(|x| *x == selected)
             .ok_or_else(|| anyhow::anyhow!("未找到该选项: {selected}"))
     }
+
+    fn select_equipment_upgrade(&self, _game: &G, options: &[String], _rng: &mut StdRng) -> Result<usize> {
+        let selected = Select::new("请选择要升级的装备:", options.to_vec())
+            .with_page_size(options.len())
+            .prompt()?;
+        options
+            .iter()
+            .position(|x| *x == selected)
+            .ok_or_else(|| anyhow::anyhow!("未找到该选项: {selected}"))
+    }
 }

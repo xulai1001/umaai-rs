@@ -45,6 +45,8 @@ pub struct OnsenGame {
     pub onsen_state: Vec<bool>,
     /// 当前每个温泉的剩余挖掘量
     pub dig_remain: Vec<[i32; 3]>,
+    /// 当前每个温泉的每层累计挖掘进度（用于计算奖励）
+    pub dig_progress: Vec<[i32; 3]>,
     /// 挖了几个温泉
     pub dig_count: i32,
     /// 当前挖掘力加成，更新状态时重新计算
@@ -54,7 +56,9 @@ pub struct OnsenGame {
     /// 蓝因子数量
     pub dig_blue_count: Array5,
     /// 挖掘消耗的体力
-    pub dig_vital_cost: i32
+    pub dig_vital_cost: i32,
+    /// 挖掘完成后待处理选择（装备升级+源泉选择）
+    pub pending_selection: bool
 }
 
 impl Deref for OnsenGame {
@@ -116,11 +120,17 @@ impl OnsenGame {
         for i in 0..5 {
             ret.dig_blue_count[i] = (ret.inherit.blue_count[i] as f32 / 3.0).ceil() as i32;
         }
-        // 温泉剩余量
+        // 温泉剩余量和进度
         let onsen_info = &global!(ONSENDATA).onsen_info;
         for i in 0..onsen_info.len() {
-            ret.dig_remain
-                .push(onsen_info[i].dig_volume.clone().try_into().expect("dig_volume"));
+            if i == 0 {
+                // 初始温泉已挖掘完成，剩余量为0，避免挖掘完成初始温泉给俩票的问题出现
+                ret.dig_remain.push([0, 0, 0]);
+            } else {
+                ret.dig_remain
+                    .push(onsen_info[i].dig_volume.clone().try_into().expect("dig_volume"));
+            }
+            ret.dig_progress.push([0, 0, 0]); // 初始进度为0
         }
         ret.init_persons()?;
         Ok(ret)
@@ -155,8 +165,11 @@ impl OnsenGame {
         }
     }
 
+    /// 获得当前层之后的下一个有剩余的层
     pub fn next_dig_type(&self) -> Option<usize> {
-        if let Some(mut ty) = self.current_dig_type() {
+        if let Some(current_ty) = self.current_dig_type() {
+            // 从下一层开始找
+            let mut ty = current_ty + 1;
             while ty < 3 && self.dig_remain[self.current_onsen][ty] == 0 {
                 ty += 1;
             }
@@ -292,9 +305,17 @@ impl OnsenGame {
         let mut ret = [0, 0, 0];
         let mut link_bonus = [0, 0, 0];
         let link_effect = &global!(ONSENDATA).link_effect;
-        // Link角色加成
+        // Link角色加成（马娘）
         if let Some(ty) = link_effect.get(&self.uma.chara_id().to_string()) {
             link_bonus[(*ty - 1) as usize] += 10;
+        }
+        // Link支援卡加成（全局，只要携带就生效）
+        for i in 0..6 {
+            if i < self.persons.len() {
+                if let Some(ty) = link_effect.get(&self.persons[i].chara_id.to_string()) {
+                    link_bonus[(*ty - 1) as usize] += 10;
+                }
+            }
         }
         // 基础挖掘量
         let base_dig_value = match action {
@@ -304,10 +325,6 @@ impl OnsenGame {
                     // 人头数排除记者理事长
                     if *p != 6 && *p != 7 {
                         person_count += 1;
-                    }
-                    // link卡加成
-                    if let Some(ty) = link_effect.get(&self.persons[*p as usize].chara_id.to_string()) {
-                        link_bonus[(*ty - 1) as usize] += 10;
                     }
                 }
                 Some(25 + person_count)
@@ -338,7 +355,9 @@ impl OnsenGame {
                 ret[ty] = self.dig_remain[self.current_onsen][ty];
                 let base_remain = base as f32 - self.dig_remain[self.current_onsen][ty] as f32 / current_dig_rate;
                 let next_dig_rate = (100.0 + self.dig_power[next_ty] as f32) / 100.0;
-                ret[next_ty] = (base_remain * next_dig_rate).floor() as i32;
+                // 限制不超过下一层剩余量
+                let next_dig_value = (base_remain * next_dig_rate).floor() as i32;
+                ret[next_ty] = next_dig_value.min(self.dig_remain[self.current_onsen][next_ty]);
             } else {
                 ret[ty] = dig_value.min(self.dig_remain[self.current_onsen][ty]);
             }
@@ -364,20 +383,198 @@ impl OnsenGame {
         let ret = global!(ONSENDATA).super_probs[new_rank] as f64 / 100.0;
         if new_rank > old_rank { ret } else { ret / 4.0 }
     }
+
+    /// 训练后超回复触发判定
+    /// 在训练消耗体力后调用，判定是否触发超回复
+    pub fn update_super_on_vital_cost(&mut self, vital_cost: i32, rng: &mut StdRng) {
+        if vital_cost <= 0 {
+            return;
+        }
+        // 如果已经有超回复预备状态，不再判定
+        if self.bathing.is_super_ready {
+            // 仍需累加消耗
+            self.dig_vital_cost += vital_cost;
+            return;
+        }
+        // 计算触发概率
+        let prob = self.calc_super_prob(vital_cost);
+        // 随机判定
+        if rng.random_bool(prob) {
+            self.add_super();
+        }
+        // 累加体力消耗
+        self.dig_vital_cost += vital_cost;
+    }
     /// 执行挖掘, true为挖完了
+    /// 
+    /// 每30点进度触发一次奖励，奖励内容根据地层类型决定：
+    /// - 砂层: 速+2, 耐+1, 智+2, 体-3
+    /// - 土层: 速+2, 力+1, 根+2, 体-3
+    /// - 岩层: 耐+1, 力+2, 智+2, 体-3
     pub fn do_dig(&mut self, value: &[i32; 3]) -> bool {
+        let dig_bonus = &global!(ONSENDATA).dig_bonus;
+        let mut total_bonus = [0i32; 6];
+        
         for i in 0..3 {
+            if value[i] > 0 {
+                // 计算奖励次数: floor((进度+挖掘量)/30) - floor(进度/30)
+                let old_count = self.dig_progress[self.current_onsen][i] / 30;
+                let new_count = (self.dig_progress[self.current_onsen][i] + value[i]) / 30;
+                let bonus_count = new_count - old_count;
+                
+                // 累加奖励
+                if bonus_count > 0 {
+                    let bonus = &dig_bonus[i];
+                    for j in 0..6 {
+                        total_bonus[j] += bonus[j] * bonus_count;
+                    }
+                }
+                
+                // 更新进度
+                self.dig_progress[self.current_onsen][i] += value[i];
+            }
             self.dig_remain[self.current_onsen][i] -= value[i];
         }
+        
+        // 应用挖掘奖励
+        if total_bonus != [0; 6] {
+            let bonus_count = total_bonus.iter().map(|x| x.abs()).max().unwrap_or(0) / 2;
+            info!(
+                "挖掘奖励x{}: 速{:+} 耐{:+} 力{:+} 根{:+} 智{:+} 体{:+}",
+                bonus_count.max(1), total_bonus[0], total_bonus[1], total_bonus[2], 
+                total_bonus[3], total_bonus[4], total_bonus[5]
+            );
+            // 应用属性
+            for j in 0..5 {
+                self.uma.five_status[j] += total_bonus[j];
+            }
+            // 应用体力变化
+            self.uma.vital = (self.uma.vital + total_bonus[5]).clamp(0, 100);
+        }
+        
         if self.dig_remain[self.current_onsen].iter().all(|x| *x <= 0) {
             self.dig_remain[self.current_onsen] = [0, 0, 0];
-            // 挖完了
-            self.onsen_state[self.current_onsen] = true;
-            self.add_ticket(self.grant_ticket_num());
+            // 检查是否是新完成的温泉（避免初始温泉重复给奖励）
+            if !self.onsen_state[self.current_onsen] {
+                // 挖完了
+                self.onsen_state[self.current_onsen] = true;
+                self.add_ticket(self.grant_ticket_num());
+                // 设置待处理选择标志（装备升级+源泉选择）
+                self.pending_selection = true;
+                info!("温泉挖掘完成，待处理装备升级和源泉选择");
+            }
             true
         } else {
             false
         }
+    }
+
+    /// 执行训练
+    /// 返回: (训练是否成功, 体力消耗)
+    pub fn do_train(&mut self, train: usize, rng: &mut StdRng) -> Result<(bool, i32)> {
+        // sanity check 训练等级越界
+        if train >= 5 {
+            return Err(anyhow!("训练等级越界: {train}"));
+        }
+        info!(
+            ">> {}训练 等级 {}",
+            global!(GAMECONSTANTS).train_names[train],
+            self.train_level(train)
+        );
+
+        let vital_before = self.uma.vital;
+        let buffs = self.calc_training_buff(train)?;
+        let failure_rate = self.calc_training_failure_rate(&buffs, train) / 100.0;
+
+        if rng.random_bool(failure_rate as f64) {
+            // 再判断一次，如果还失败就是大失败
+            if rng.random_bool(failure_rate as f64) {
+                warn!("训练大失败!");
+                self.apply_event(system_event("training_fail_low")?, 0, rng)?;
+                self.uma.flags.ill = true;
+                self.uma.flags.bad_trainer = true;
+            } else {
+                warn!("训练失败!");
+                self.apply_event(system_event("training_fail")?, 0, rng)?;
+            }
+            let vital_cost = (vital_before - self.uma.vital).max(0);
+            return Ok((false, vital_cost));
+        }
+
+        // 训练成功
+        let value = self.calc_training_value(&buffs, train)?;
+        self.uma.add_value(&value);
+        // 增加训练次数
+        self.train_level_count[train] += 1;
+        // 增加羁绊
+        let f = if self.uma.flags.aijiao { 9 } else { 7 };
+        let mut hint_persons = vec![];
+        let mut friend_clicked = false;
+        let mut yayoi_clicked = false;
+        let mut reporter_clicked = false;
+
+        for person_index in self.distribution[train].clone() {
+            self.add_friendship(person_index as usize, f);
+            if self.persons[person_index as usize].is_hint {
+                hint_persons.push(person_index);
+            }
+            match self.persons[person_index as usize].person_type {
+                PersonType::ScenarioCard => friend_clicked = true,
+                PersonType::Yayoi => yayoi_clicked = true,
+                PersonType::Reporter => reporter_clicked = true,
+                _ => {}
+            };
+        }
+
+        // 生成加练或者红点事件
+        if let Some(p) = hint_persons.choose(rng) {
+            let attr_prob = system_event_prob("hint_attr")?;
+            let hint_level = if *p < 6 {
+                1 + self.deck[*p as usize].card_value()?.hint_level
+            } else {
+                1
+            };
+            let hint_event = if rng.random_bool(attr_prob as f64) {
+                // 红点提供属性
+                EventData::hint_attr_event(self.persons[*p as usize].train_type as usize, *p as usize)?
+            } else {
+                // 红点提供技能
+                EventData::hint_skill_event(hint_level, *p as usize)
+            };
+            self.unresolved_events.push(hint_event);
+        }
+        let extra_train_prob = system_event_prob("extra_train")?;
+        if !self.is_xiahesu() && rng.random_bool(extra_train_prob as f64) {
+            self.unresolved_events.push(EventData::extra_training_event(train));
+        }
+
+        // 更新友人状态
+        if friend_clicked {
+            match self.friend.out_state {
+                FriendOutState::UnClicked => {
+                    self.friend.out_state = FriendOutState::BeforeUnlock;
+                    let mut event = global_events().friend_events["first"].clone();
+                    event.person_index = Some(self.friend.person_index as i32);
+                    self.unresolved_events.push(event);
+                }
+                _ => {
+                    let mut event = global_events().friend_events["click"].clone();
+                    event.person_index = Some(self.friend.person_index as i32);
+                    self.unresolved_events.push(event);
+                }
+            }
+        }
+        if yayoi_clicked {
+            self.unresolved_events.push(system_event("yayoi_click")?.clone());
+        }
+        if reporter_clicked {
+            let mut event = system_event("reporter_click")?.clone();
+            event.choices[0].status_pt[train] = 2;
+            self.unresolved_events.push(event);
+        }
+
+        let vital_cost = (vital_before - self.uma.vital).max(0);
+        Ok((true, vital_cost))
     }
 
     /// 执行选择温泉
@@ -438,6 +635,309 @@ impl OnsenGame {
         }
         Ok(())
     }
+
+    /// 执行PR动作
+    /// 
+    /// # 效果
+    /// 使用 pr_base_value 配置：五维各+6，技能点+15，体力-15
+    /// 
+    /// # 返回
+    /// 体力消耗值（用于超回复判定）
+    pub fn do_pr(&mut self, _rng: &mut StdRng) -> Result<i32> {
+        info!(">> PR");
+        let pr_value = &global!(ONSENDATA).pr_base_value;
+        let vital_before = self.uma.vital;
+        
+        // 应用PR效果
+        self.uma.add_value(pr_value);
+        
+        // 计算体力消耗
+        let vital_cost = (vital_before - self.uma.vital).max(0);
+        Ok(vital_cost)
+    }
+
+    /// 执行使用温泉券（温泉入浴）
+    /// 
+    /// # 效果
+    /// 1. 随机选择3张支援卡羁绊各+10
+    /// 2. 体力恢复（根据温泉效果配置）
+    /// 3. 干劲提升（根据温泉效果配置）
+    /// 4. 超回复效果应用（如果 is_super_ready）
+    /// 5. 消耗温泉券，设置 buff_remain_turn = 2
+    pub fn do_use_ticket(&mut self, rng: &mut StdRng) -> Result<()> {
+        // 检查温泉券
+        if self.bathing.ticket_num <= 0 {
+            return Err(anyhow!("没有温泉券"));
+        }
+        if self.bathing.buff_remain_turn > 0 {
+            return Err(anyhow!("温泉效果尚未结束"));
+        }
+
+        info!(">> 使用温泉券");
+
+        // 1. 随机选择3张支援卡羁绊各+10
+        let card_indices: Vec<usize> = (0..6)
+            .filter(|i| *i < self.persons.len() && self.persons[*i].person_type == PersonType::Card)
+            .collect();
+        
+        // 打乱顺序后按羁绊排序，取羁绊最低的3人
+        let mut shuffled_indices = card_indices.clone();
+        use rand::seq::SliceRandom;
+        shuffled_indices.shuffle(rng);
+        shuffled_indices.sort_by_key(|&i| self.persons[i].friendship);
+        
+        let selected_count = shuffled_indices.len().min(3);
+        for &idx in shuffled_indices.iter().take(selected_count) {
+            self.add_friendship(idx, 10);
+        }
+
+        // 2. 体力恢复（根据温泉效果配置）
+        // Bug 1 修复：先判断超回复状态决定体力上限，再一次性应用所有恢复
+        let vital_bonus = self.scenario_buff.onsen.vital;
+        let super_effect = &global!(ONSENDATA).super_effect;
+        
+        // 计算体力上限和总恢复量
+        // 注：max_vital 可能被友人事件提升（如112），超回复时使用临时上限150
+        let (max_hp, total_recovery) = if self.bathing.is_super_ready {
+            (super_effect.temp_max_vital, vital_bonus + super_effect.vital)
+        } else {
+            (self.uma.max_vital, vital_bonus)
+        };
+        
+        // 一次性应用体力恢复
+        self.uma.vital = (self.uma.vital + total_recovery).min(max_hp);
+        info!("  体力+{} (={}, 上限{})", total_recovery, self.uma.vital, max_hp);
+
+        // 3. 干劲提升（根据温泉效果配置）
+        let motivation_bonus = self.scenario_buff.onsen.motivation;
+        if motivation_bonus > 0 {
+            self.uma.motivation = (self.uma.motivation + motivation_bonus).min(5);
+            info!("  干劲+{} (={})", motivation_bonus, self.uma.motivation);
+        }
+
+        // 4. 超回复额外效果应用（体力已在上面处理）
+        if self.bathing.is_super_ready {
+            info!("{}", ">> 超回复发动！".cyan());
+            
+            // 技能点
+            self.uma.skill_pt += super_effect.pt;
+            info!("  超回复: 技能点+{} (={})", super_effect.pt, self.uma.skill_pt);
+            
+            // Hint加成（重新判定Hint）
+            let hint_bonus = super_effect.hint + self.scenario_buff.hotel.hint;
+            info!("  超回复: Hint重新判定 (加成: {})", hint_bonus);
+            self.redistribute_hint(rng)?;
+            
+            // 标记超回复已使用
+            self.bathing.is_super = true;
+            // Bug 3 修复：如果 must_super 为真（传说秘泉效果），保持超回复可用
+            if self.scenario_buff.hotel.must_super {
+                info!("  传说秘泉效果: 超回复状态保持");
+            } else {
+                self.bathing.is_super_ready = false;
+            }
+        }
+
+        // 5. 消耗温泉券，设置buff持续2回合
+        self.bathing.ticket_num -= 1;
+        self.bathing.buff_remain_turn = 2;
+        info!("  温泉券剩余: {}, Buff持续: {}回合", self.bathing.ticket_num, self.bathing.buff_remain_turn);
+
+        // 6. 秘汤汤驹效果：追加支援卡（split效果）
+        if self.scenario_buff.onsen.split > 0 {
+            self.select_extra_support_cards(rng);
+            // 立即分配并显示更新的训练详情
+            if self.distribute_extra_supports(rng) {
+                info!("追加分配后训练:\n{}", self.explain_distribution()?);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// 选择追加训练的支援卡（秘汤汤驹效果）
+    ///
+    /// 从有训练位置（train_type 0-4）的支援卡中随机选择最多 split 张卡
+    /// 这些卡将在 Distribute 阶段获得额外训练位置
+    fn select_extra_support_cards(&mut self, rng: &mut StdRng) {
+        use rand::seq::SliceRandom;
+        
+        let split_count = self.scenario_buff.onsen.split as usize;
+        
+        // 收集有训练位置的支援卡索引（前6张为支援卡）
+        let candidates: Vec<usize> = self
+            .persons
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| *i < 6 && p.train_type >= 0 && p.train_type <= 4)
+            .map(|(i, _)| i)
+            .collect();
+
+        // 打乱并取前 split_count 张
+        let mut shuffled = candidates;
+        shuffled.shuffle(rng);
+        self.bathing.extra_support_indices = shuffled.into_iter().take(split_count).collect();
+
+        // 日志记录
+        let names: Vec<String> = self
+            .bathing
+            .extra_support_indices
+            .iter()
+            .filter_map(|&i| self.persons.get(i).map(|p| p.short_name()))
+            .collect();
+        info!(">> 秘汤汤驹效果: 追加训练支援卡: {:?}", names);
+    }
+
+    /// 分配追加支援卡到额外训练位置（秘汤汤驹效果）
+    ///
+    /// 在 Distribute 阶段调用，为 extra_support_indices 中的卡分配额外训练位置
+    /// 每张卡分配到其当前未在的随机一个训练位置（不超过5人）
+    ///
+    /// # 返回
+    /// 是否有额外分配发生（用于决定是否重新显示训练详情）
+    pub fn distribute_extra_supports(&mut self, rng: &mut StdRng) -> bool {
+        // 检查温泉效果是否激活且有追加支援卡效果
+        if self.bathing.buff_remain_turn == 0
+            || self.scenario_buff.onsen.split == 0
+            || self.bathing.extra_support_indices.is_empty()
+        {
+            return false;
+        }
+
+        let mut added_count = 0;
+        
+        // 为每张选中的卡分配额外位置
+        for &card_index in &self.bathing.extra_support_indices.clone() {
+            // 找到该卡当前所在的训练位置
+            let current_positions: Vec<usize> = self
+                .distribution
+                .iter()
+                .enumerate()
+                .filter(|(_, members)| members.contains(&(card_index as i32)))
+                .map(|(i, _)| i)
+                .collect();
+
+            // 找到该卡未在的训练位置且人数不超过4（可再加1人）
+            let available_positions: Vec<usize> = (0..5)
+                .filter(|&i| {
+                    !current_positions.contains(&i) && self.distribution[i].len() < 5
+                })
+                .collect();
+
+            // 随机选择一个位置
+            if let Some(&pos) = available_positions.choose(rng) {
+                self.distribution[pos].push(card_index as i32);
+                added_count += 1;
+                info!(
+                    "  {} 追加分配到 {} 训练",
+                    self.persons[card_index].short_name(),
+                    global!(GAMECONSTANTS).train_names[pos]
+                );
+            }
+        }
+
+        if added_count > 0 {
+            info!(">> 秘汤汤驹效果: 追加分配 {} 人", added_count);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 执行选择挖掘温泉
+    /// 
+    /// # 参数
+    /// - `onsen_index`: 温泉索引
+    pub fn do_select_dig(&mut self, onsen_index: usize) -> Result<()> {
+        let onsen_info = &global!(ONSENDATA).onsen_info;
+        if onsen_index >= onsen_info.len() {
+            return Err(anyhow!("温泉索引越界: {}", onsen_index));
+        }
+        if self.onsen_state[onsen_index] {
+            return Err(anyhow!("该温泉已被挖掘完成: {}", onsen_info[onsen_index].name));
+        }
+        if self.turn < onsen_info[onsen_index].unlock_turn {
+            return Err(anyhow!("该温泉尚未解锁: {}", onsen_info[onsen_index].name));
+        }
+
+        info!(">> 选择挖掘温泉: {}", onsen_info[onsen_index].name.cyan());
+        self.current_onsen = onsen_index;
+        
+        Ok(())
+    }
+
+    /// 获取可升级的装备列表
+    ///
+    /// # 返回
+    /// 等级小于6的装备类型索引列表 (0=砂, 1=土, 2=岩)
+    /// 等级范围: 1-6，对应 dig_tool_level 的索引1-6
+    pub fn get_upgradeable_equipment(&self) -> Vec<usize> {
+        (0..3)
+            .filter(|&i| self.dig_level[i] < 6)
+            .collect()
+    }
+
+    /// 执行装备升级
+    ///
+    /// # 参数
+    /// - `dig_type`: 装备类型 (0=砂, 1=土, 2=岩)
+    ///
+    /// 等级范围: 1-6，最大等级为6
+    pub fn do_upgrade_equipment(&mut self, dig_type: usize) -> Result<()> {
+        let dig_type_names = ["砂", "土", "岩"];
+        if dig_type >= 3 {
+            return Err(anyhow!("装备类型越界: {}", dig_type));
+        }
+        if self.dig_level[dig_type] >= 6 {
+            return Err(anyhow!("装备已达最高等级: {}", dig_type_names[dig_type]));
+        }
+
+        let old_level = self.dig_level[dig_type];
+        self.dig_level[dig_type] += 1;
+        info!(
+            ">> 装备升级: {} Lv.{} -> Lv.{}",
+            dig_type_names[dig_type], old_level, self.dig_level[dig_type]
+        );
+
+        Ok(())
+    }
+
+    /// 处理挖掘完成后的选择流程（装备升级+源泉选择）
+    pub fn handle_pending_selection<T: Trainer<Self>>(&mut self, trainer: &T, rng: &mut StdRng) -> Result<()> {
+        if !self.pending_selection {
+            return Ok(());
+        }
+
+        // 1. 装备升级
+        let upgradeable = self.get_upgradeable_equipment();
+        if !upgradeable.is_empty() {
+            let dig_type_names = ["砂", "土", "岩"];
+            let options: Vec<String> = upgradeable
+                .iter()
+                .map(|&i| {
+                    format!("{} Lv.{} -> Lv.{}", dig_type_names[i], self.dig_level[i], self.dig_level[i] + 1)
+                })
+                .collect();
+            
+            info!("选择要升级的装备:");
+            for (i, opt) in options.iter().enumerate() {
+                info!("  {}: {}", i, opt);
+            }
+            
+            let selection = trainer.select_equipment_upgrade(self, &options, rng)?;
+            if selection < upgradeable.len() {
+                self.do_upgrade_equipment(upgradeable[selection])?;
+            }
+        }
+
+        // 2. 源泉选择
+        self.do_select_onsen(trainer, rng)?;
+
+        // 3. 重置标志
+        self.pending_selection = false;
+
+        Ok(())
+    }
 }
 
 impl Game for OnsenGame {
@@ -495,7 +995,6 @@ impl Game for OnsenGame {
     }
 
     fn list_actions(&self) -> Result<Vec<Self::Action>> {
-        let mut actions = vec![];
         match self.stage {
             OnsenTurnStage::Bathing => {
                 // sanity check
@@ -509,7 +1008,7 @@ impl Game for OnsenGame {
                 if self.is_race_turn()? {
                     Ok(vec![OnsenAction::Race])
                 } else {
-                    actions = vec![
+                    let mut actions = vec![
                         OnsenAction::Train(0),
                         OnsenAction::Train(1),
                         OnsenAction::Train(2),
@@ -768,6 +1267,10 @@ impl Game for OnsenGame {
             OnsenTurnStage::Begin => {
                 println!("-----------------------------------------");
                 info!("{}", self.explain()?);
+                // 处理上一回合挖掘完成后的选择（装备升级+源泉选择）
+                if self.pending_selection {
+                    self.handle_pending_selection(trainer, rng)?;
+                }
                 let mut events = self.generate_events(rng);
                 // 友人强制事件
                 if self.friend.out_state == FriendOutState::AfterUnlock {
@@ -790,6 +1293,18 @@ impl Game for OnsenGame {
                 if [2, 36, 60].contains(&self.turn) {
                     self.add_ticket(self.grant_ticket_num());
                 }
+                // 第二回合：初始温泉视为完成，触发装备升级+源泉选择
+                if self.turn == 2 && self.current_onsen == 0 && self.onsen_state[0] {
+                    // 复用 handle_pending_selection 的完整流程
+                    self.pending_selection = true;
+                    self.handle_pending_selection(trainer, rng)?;
+                }
+                // 新温泉解锁回合：触发装备升级+源泉选择
+                let unlock_turns = [24, 48, 65];
+                if unlock_turns.contains(&self.turn) {
+                    info!("新温泉解锁，触发选择流程");
+                    self.handle_pending_selection(trainer, rng)?;
+                }
                 // 执行回合前事件
                 for event in &events {
                     self.run_event(event, trainer, rng)?;
@@ -803,6 +1318,11 @@ impl Game for OnsenGame {
                     self.distribute_all(rng)?;
                     self.distribute_hint(rng)?;
                     info!("训练:\n{}", self.explain_distribution()?);
+                    
+                    // 秘汤汤驹效果：额外分配支援卡并重新显示训练详情
+                    if self.distribute_extra_supports(rng) {
+                        info!("追加分配后训练:\n{}", self.explain_distribution()?);
+                    }
                 }
             }
             OnsenTurnStage::Train => {
@@ -812,6 +1332,16 @@ impl Game for OnsenGame {
                 let after_events = std::mem::take(&mut self.unresolved_events);
                 for event in &after_events {
                     self.run_event(event, trainer, rng)?;
+                }
+                // buff回合倒计时
+                if self.bathing.buff_remain_turn > 0 {
+                    self.bathing.buff_remain_turn -= 1;
+                    if self.bathing.buff_remain_turn == 0 {
+                        self.bathing.is_super = false;
+                        // 清空秘汤汤驹效果的追加支援卡
+                        self.bathing.extra_support_indices.clear();
+                        info!("温泉效果已结束");
+                    }
                 }
             }
             OnsenTurnStage::Bathing => {
@@ -864,4 +1394,22 @@ impl Game for OnsenGame {
             (self.train_level_count[train] as usize / 4 + 1).min(5).max(1)
         }
     }
+
+    fn on_simulation_end<T: Trainer<Self>>(&mut self, trainer: &T, rng: &mut StdRng) -> Result<()> {
+        info!(">> 育成结束，触发最终奖励事件");
+        
+        // 查找回合78事件 (ぴょいや！大宴会！)
+        let onsen_data = global!(ONSENDATA);
+        if let Some(event) = onsen_data.scenario_events.iter().find(|e| e.id == 400012021) {
+            self.run_event(event, trainer, rng)?;
+        } else {
+            warn!("未找到育成结束事件 (id=400012021)");
+        }
+        
+        Ok(())
+    }
 }
+
+
+
+

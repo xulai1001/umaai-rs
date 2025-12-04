@@ -40,6 +40,11 @@ pub struct OnsenScenarioData {
     pub dig_stat_bonus_types: Vec<Vec<i32>>,
     /// 不同挖掘时，每回合的固定属性加成(不含3体力降低)
     pub dig_fixed_stat: Vec<Array5>,
+    /// 挖掘奖励: [速度, 耐力, 力量, 根性, 智力, 体力变化]
+    /// 砂层: [2, 1, 0, 0, 2, -3]
+    /// 土层: [2, 0, 1, 2, 0, -3]
+    /// 岩层: [0, 1, 2, 0, 2, -3]
+    pub dig_bonus: Vec<[i32; 6]>,
     /// 超回复触发概率
     pub super_probs: Vec<i32>,
     /// 剧本事件

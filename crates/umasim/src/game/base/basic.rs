@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn test_newgame() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
         let mut game = BasicGame::newgame(101901, &[302424, 302464, 302484, 302564, 302574, 302644], InheritInfo {
             blue_count: [15, 3, 0, 0, 0],

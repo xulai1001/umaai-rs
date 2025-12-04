@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn test_support() -> Result<()> {
-        init_logger()?;
+        init_logger("debug")?;
         init_global()?;
         let card = SupportCard::new(302424)?;
         println!("{}", card.explain()?);

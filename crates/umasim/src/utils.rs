@@ -10,7 +10,16 @@ use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA};
 pub type Array5 = [i32; 5];
 pub type Array6 = [i32; 6];
 
-pub fn init_logger() -> Result<()> {
+/// 初始化日志系统
+///
+/// # 参数
+/// - `level`: 日志级别，"debug" (完整显示) | "off" (全部关闭)
+pub fn init_logger(level: &str) -> Result<()> {
+    let filter = match level.to_lowercase().as_str() {
+        "off" => log::LevelFilter::Off,
+        _ => log::LevelFilter::Debug, // 默认显示全部日志
+    };
+
     let mut builder = Builder::new();
     builder.format(|buf, record| {
         let level_sty = buf.default_level_style(record.level());
@@ -34,7 +43,7 @@ pub fn init_logger() -> Result<()> {
         )
         */
     });
-    builder.filter_level(log::LevelFilter::Debug).try_init()?;
+    builder.filter_level(filter).try_init()?;
     Ok(())
 }
 
