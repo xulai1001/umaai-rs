@@ -88,16 +88,19 @@ impl ActionEnum for OnsenAction {
             // ========== 比赛动作 ==========
             OnsenAction::Race => {
                 let race_bonus = (100 + game.uma.race_bonus) as f32 / 100.0;
+                let buff_bonus = if game.bathing.buff_remain_turn > 0 {
+                    (100 + game.scenario_buff.onsen.career_race_bonus) as f32 / 100.0
+                } else {
+                    1.0
+                };
                 if game.uma.is_race_turn(game.turn)? {
                     let mut scenario_bonus = if game.turn < 72 {
-                        global!(ONSENDATA).career_race_multiplier
-                            * (100 + game.scenario_buff.onsen.career_race_bonus) as f32
-                            / 100.0
+                        global!(ONSENDATA).career_race_multiplier * buff_bonus
                     } else {
                         1.0
                     };
-                    if game.uma.chara_id() == 1063 {
-                        // 狄杜斯：再增加50%
+                    if game.uma.chara_id() == 1063 && game.turn > 12 {
+                        // 狄杜斯出道赛后：再增加50%
                         scenario_bonus *= 1.5;
                     }
                     info!(

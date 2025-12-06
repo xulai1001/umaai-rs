@@ -380,7 +380,7 @@ impl OnsenGame {
     /// 训练后超回复触发判定
     /// 在训练消耗体力后调用，判定是否触发超回复
     pub fn update_super_on_vital_cost(&mut self, vital_cost: i32, rng: &mut StdRng) {
-        if !self.bathing.is_super_ready {
+        if !self.bathing.is_super_ready && self.turn >= 2 {
             // 计算触发概率
             let prob = self.calc_super_prob(vital_cost);
             // 累加体力消耗
