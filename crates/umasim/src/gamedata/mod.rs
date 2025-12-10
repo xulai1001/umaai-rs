@@ -402,6 +402,93 @@ impl GameConstants {
     }
 }
 
+/// MCTS 搜索配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MctsConfig {
+    /// 每个动作的搜索次数
+    #[serde(default = "default_mcts_search_n")]
+    pub search_n: usize,
+    /// 激进度因子最大值
+    #[serde(default = "default_mcts_radical_factor_max")]
+    pub radical_factor_max: f64,
+    /// 最大搜索深度（0 = 搜到游戏结束）
+    #[serde(default = "default_mcts_max_depth")]
+    pub max_depth: usize,
+    /// Policy softmax 温度（分数每降低多少，概率变成 1/e 倍）
+    #[serde(default = "default_mcts_policy_delta")]
+    pub policy_delta: f64,
+
+    // ========== UCB 搜索分配参数 ==========
+
+    /// 是否启用 UCB 搜索分配
+    #[serde(default = "default_mcts_use_ucb")]
+    pub use_ucb: bool,
+    /// UCB 每组搜索次数
+    #[serde(default = "default_mcts_search_group_size")]
+    pub search_group_size: usize,
+    /// UCB 探索常数 (cpuct)
+    #[serde(default = "default_mcts_search_cpuct")]
+    pub search_cpuct: f64,
+    /// 预期搜索标准差
+    #[serde(default = "default_mcts_expected_search_stdev")]
+    pub expected_search_stdev: f64,
+    /// 是否启用激进度随回合调整
+    #[serde(default = "default_mcts_adjust_radical_by_turn")]
+    pub adjust_radical_by_turn: bool,
+}
+
+impl Default for MctsConfig {
+    fn default() -> Self {
+        Self {
+            search_n: default_mcts_search_n(),
+            radical_factor_max: default_mcts_radical_factor_max(),
+            max_depth: default_mcts_max_depth(),
+            policy_delta: default_mcts_policy_delta(),
+            use_ucb: default_mcts_use_ucb(),
+            search_group_size: default_mcts_search_group_size(),
+            search_cpuct: default_mcts_search_cpuct(),
+            expected_search_stdev: default_mcts_expected_search_stdev(),
+            adjust_radical_by_turn: default_mcts_adjust_radical_by_turn(),
+        }
+    }
+}
+
+fn default_mcts_search_n() -> usize {
+    1024 // 默认搜索次数
+}
+
+fn default_mcts_radical_factor_max() -> f64 {
+    50.0 // 默认激进度最大值
+}
+
+fn default_mcts_max_depth() -> usize {
+    0  // 搜到游戏结束
+}
+
+fn default_mcts_policy_delta() -> f64 {
+    100.0 
+}
+
+fn default_mcts_use_ucb() -> bool {
+    true // 默认使用UCB分配
+}
+
+fn default_mcts_search_group_size() -> usize {
+    128
+}
+
+fn default_mcts_search_cpuct() -> f64 {
+    1.0
+}
+
+fn default_mcts_expected_search_stdev() -> f64 {
+    2200.0 
+}
+
+fn default_mcts_adjust_radical_by_turn() -> bool {
+    true  // 默认启用激进度调整
+}
+
 /// 运行配置（临时）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GameConfig {
@@ -411,7 +498,7 @@ pub struct GameConfig {
     /// 日志级别: "debug" (完整显示) | "off" (全部关闭)
     #[serde(default = "default_log_level")]
     pub log_level: String,
-    /// 训练员类型: "manual" (手动选择) | "random" (猴子训练员)
+    /// 训练员类型: "manual" | "random" | "handwritten" | "collector" | "neuralnet" | "mcts"
     #[serde(default = "default_trainer")]
     pub trainer: String,
     /// 模拟次数（默认1次，设置大于1可多次模拟并统计）
@@ -426,7 +513,10 @@ pub struct GameConfig {
     /// 种马额外属性
     pub extra_count: Array6,
     /// 温泉顺序
-    pub onsen_order: Vec<u32>
+    pub onsen_order: Vec<u32>,
+    /// MCTS 配置（可选）
+    #[serde(default)]
+    pub mcts: MctsConfig,
 }
 
 fn default_scenario() -> String {

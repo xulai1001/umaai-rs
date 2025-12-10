@@ -316,6 +316,42 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
+                "mcts" => {
+                    // MCTS 训练员
+                    use umasim::search::SearchConfig;
+                    let search_config = SearchConfig::default()
+                        .with_search_n(game_config.mcts.search_n)
+                        .with_radical_factor_max(game_config.mcts.radical_factor_max)
+                        .with_max_depth(game_config.mcts.max_depth)
+                        .with_policy_delta(game_config.mcts.policy_delta)
+                        // UCB 参数
+                        .with_ucb(game_config.mcts.use_ucb)
+                        .with_search_group_size(game_config.mcts.search_group_size)
+                        .with_search_cpuct(game_config.mcts.search_cpuct)
+                        .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
+                        .with_adjust_radical_by_turn(game_config.mcts.adjust_radical_by_turn);
+                    let trainer = MctsTrainer::new(search_config).verbose(simulation_count == 1);
+                    match game_config.scenario.as_str() {
+                        "onsen" => run_onsen_once(
+                            &trainer,
+                            game_config.uma,
+                            &game_config.cards,
+                            inherit.clone(),
+                            &mut rng
+                        ),
+                        _ => {
+                            println!("警告: MCTS 训练员仅支持 onsen 剧本，使用 random 训练员");
+                            let trainer = RandomTrainer;
+                            run_basic_once(
+                                &trainer,
+                                game_config.uma,
+                                &game_config.cards,
+                                inherit.clone(),
+                                &mut rng
+                            )
+                        }
+                    }
+                }
                 _ => {
                     // 默认使用手动训练员（不支持多次模拟）
                     if simulation_count > 1 {

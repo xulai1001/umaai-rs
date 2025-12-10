@@ -10,7 +10,8 @@ log_level = "off"
 #   "handwritten" - 手写策略（快速，使用启发式规则）
 #   "collector"   - 样本收集器（用于生成神经网络训练数据）
 #   "neuralnet"   - 神经网络训练员（使用 ONNX 模型进行决策）
-#
+#   "mcts"        - 蒙特卡洛训练员（使用手写逻辑+mcts进行决策）
+
 # 【样本收集模式说明】最初版本，马上就会改了
 # 当 trainer = "collector" 时
 #   1. 运行 simulation_count 次模拟
@@ -19,11 +20,27 @@ log_level = "off"
 #   4. 按最终分数排序，筛选 Top 1% 最强赛马娘精英样本
 #   5. 保存到 training_data.bin 文件
 # 运行命令: cargo run --release --bin umasim
-trainer = "handwritten"
+trainer = "mcts"
+
+# MCTS 配置（仅当 trainer = "mcts" 时生效）
+#   search_n              - 搜索次数，每个动作模拟次数（默认128，推荐1024）
+#   radical_factor_max    - 激进度上限，越高越倾向高风险高回报（默认50）
+#   max_depth             - 最大搜索深度，0=搜到游戏结束（默认0）
+#   policy_delta          - 策略温度（训练数据生成时使用，默认100）
+#
+# UCB 搜索分配参数 
+#   use_ucb               - 是否启用 UCB 分配（默认 false）
+#   search_group_size     - UCB 每次给动作增加的搜索次数（默认256牢大是1024）
+#   search_cpuct          - UCB 探索常数，越大越倾向探索搜索次数少的动作（默认1.0）
+#   expected_search_stdev - 预期搜索标准差（默认2200,牢大的我直接抄了我也不懂什么意思）
+#   adjust_radical_by_turn - 激进度随回合递减，后期更稳（默认 true）
+#
+#   ⬇️🐧⭐ toml 的内联表{ ..... }不支持换行 ，换行会报错。
+mcts = { search_n = 1024, radical_factor_max = 50.0, max_depth = 0, policy_delta = 100.0, adjust_radical_by_turn = true, use_ucb = true, search_group_size = 256 }
 
 # 模拟次数（默认1次，大于1时显示最高分/最低分面板和平均分）
 
-simulation_count = 10000
+simulation_count = 10
 
 # 马娘ID
 uma = 106301

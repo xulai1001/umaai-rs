@@ -3,6 +3,7 @@ pub mod game;
 pub mod gamedata;
 pub mod neural;
 pub mod sample_collector;
+pub mod search;
 pub mod trainer;
 pub mod training_sample;
 pub mod utils;
