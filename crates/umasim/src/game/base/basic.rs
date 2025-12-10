@@ -98,6 +98,10 @@ impl BasicAction {
             let mut yayoi_clicked = false;
             let mut reporter_clicked = false;
             for person_index in game.distribution[train].clone() {
+                // 跳过空位（-1 表示空位）
+                if person_index < 0 {
+                    continue;
+                }
                 game.add_friendship(person_index as usize, f);
                 if game.persons[person_index as usize].is_hint {
                     hint_persons.push(person_index);

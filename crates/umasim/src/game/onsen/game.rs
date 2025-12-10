@@ -537,6 +537,10 @@ impl OnsenGame {
         let mut reporter_clicked = false;
 
         for person_index in self.distribution[train].clone() {
+            // 跳过空位（-1 表示空位）
+            if person_index < 0 {
+                continue;
+            }
             // 点击记者/理事长只加2羁绊，其他7
             if matches!(
                 self.persons[person_index as usize].person_type,

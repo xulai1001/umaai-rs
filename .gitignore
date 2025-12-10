@@ -1,12 +1,7 @@
 /target
 /docs
-/.augment
+
 /training_data
 /scripts
-/saved_models/onsen_v2
-/saved_models/onsen_v1/01
-/saved_models/onsen_v1/tensorboard
 
-# 大型训练数据文件（超过 GitHub 100MB 限制）
-training_data.bin
-*.bin
+

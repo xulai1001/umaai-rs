@@ -291,6 +291,7 @@ pub trait Game: Clone {
     fn shining_count(&self, train: usize) -> usize {
         self.distribution()[train]
             .iter()
+            .filter(|index| **index >= 0)  // 过滤掉 -1（空位）
             .filter(|index| self.is_shining_at(**index as usize, train))
             .count()
     }
