@@ -7,8 +7,8 @@
 
 use rand::rngs::StdRng;
 
-use crate::game::Game;
 use super::ValueOutput;
+use crate::game::Game;
 
 /// 评估器 Trait
 ///
@@ -76,7 +76,7 @@ pub struct RandomEvaluator;
 
 impl<G: Game> Evaluator<G> for RandomEvaluator
 where
-    G::Action: Clone,
+    G::Action: Clone
 {
     fn select_action(&self, game: &G, rng: &mut StdRng) -> Option<G::Action> {
         use rand::seq::IndexedRandom;
@@ -91,7 +91,7 @@ where
     fn evaluate(&self, game: &G) -> ValueOutput {
         // 使用游戏评分
         let score = game.uma().calc_score() as f64;
-        
+
         // 根据游戏进度调整标准差
         let progress = game.turn() as f64 / game.max_turn() as f64;
         let stdev = 500.0 * (1.0 - progress) + 100.0;
@@ -111,4 +111,3 @@ mod tests {
         assert_send_sync::<RandomEvaluator>();
     }
 }
-

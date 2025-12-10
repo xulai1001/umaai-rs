@@ -424,7 +424,9 @@ pub struct GameConfig {
     /// 种马蓝因子个数
     pub blue_count: Array5,
     /// 种马额外属性
-    pub extra_count: Array6
+    pub extra_count: Array6,
+    /// 温泉顺序
+    pub onsen_order: Vec<u32>
 }
 
 fn default_scenario() -> String {

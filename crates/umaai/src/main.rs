@@ -4,24 +4,45 @@
 use std::time::Instant;
 
 use anyhow::{Result, anyhow};
+use colored::Colorize;
 use log::info;
 use rand::{SeedableRng, rngs::StdRng};
-use colored::Colorize;
 use text_to_ascii_art::to_art;
-use umasim::{game::{Game, onsen::{OnsenTurnStage, game::OnsenGame}}, gamedata::{GameConfig, init_global}, neural::{Evaluator, NeuralNetEvaluator}, trainer::NeuralNetTrainer, utils::init_logger};
+use umasim::{
+    game::{
+        Game,
+        onsen::{OnsenTurnStage, game::OnsenGame}
+    },
+    gamedata::{GameConfig, init_global},
+    neural::{Evaluator, NeuralNetEvaluator},
+    trainer::NeuralNetTrainer,
+    utils::init_logger
+};
 
-use crate::protocol::{GameStatusOnsen, urafile::{UraFileWatcher, parse_game}};
+use crate::protocol::{
+    GameStatusOnsen,
+    urafile::{UraFileWatcher, parse_game}
+};
 
 pub mod protocol;
 
 pub fn run_evaluate<G, E>(game: &G, evaluator: &E, rng: &mut StdRng) -> Result<()>
-where G: Game, E: Evaluator<G>
+where
+    G: Game,
+    E: Evaluator<G>
 {
     let t = Instant::now();
     let score = evaluator.evaluate(&game);
     if let Some(action) = evaluator.select_action(&game, rng) {
-        info!("{}", format!("AI选择: {action}, 均分: {}, 标准差: {}, Time: {:?}",
-            score.score_mean as i64, score.score_stdev as i64, t.elapsed()).bright_green()
+        info!(
+            "{}",
+            format!(
+                "AI选择: {action}, 均分: {}, 标准差: {}, Time: {:?}",
+                score.score_mean as i64,
+                score.score_stdev as i64,
+                t.elapsed()
+            )
+            .bright_green()
         );
     }
     Ok(())
@@ -44,9 +65,9 @@ async fn main() -> Result<()> {
 
     // 神经网络训练员
     let model_path = "saved_models/onsen_v1/model.onnx";
-    let evaluator = NeuralNetEvaluator::load(model_path)
-        .map_err(|e| anyhow!("错误: 无法加载神经网络模型 {model_path}: {e:?}"))?;
-    
+    let evaluator =
+        NeuralNetEvaluator::load(model_path).map_err(|e| anyhow!("错误: 无法加载神经网络模型 {model_path}: {e:?}"))?;
+
     // 开始检测文件
     let mut watcher = UraFileWatcher::init()?;
     loop {
@@ -72,9 +93,16 @@ mod tests {
     use colored::Colorize;
     use log::info;
     use notify::{Event, RecursiveMode, Watcher};
-    use umasim::{game::Game, gamedata::{GameConfig, init_global}, utils::init_logger};
+    use umasim::{
+        game::Game,
+        gamedata::{GameConfig, init_global},
+        utils::init_logger
+    };
 
-    use crate::protocol::{GameStatusOnsen, urafile::{UraFileWatcher, parse_game}};
+    use crate::protocol::{
+        GameStatusOnsen,
+        urafile::{UraFileWatcher, parse_game}
+    };
 
     #[tokio::test]
     async fn test_watch() -> Result<()> {

@@ -23,14 +23,13 @@ use std::cell::RefCell;
 
 use anyhow::Result;
 use log::debug;
-use rand::prelude::StdRng;
-use rand::Rng;
+use rand::{Rng, prelude::StdRng};
 
 use crate::{
     game::{Trainer, onsen::game::OnsenGame},
     gamedata::ActionValue,
-    sample_collector::{GameSample, SampleCollector},
     neural::{Evaluator, HandwrittenEvaluator},
+    sample_collector::{GameSample, SampleCollector}
 };
 
 /// 默认探索率（40%）
@@ -63,7 +62,7 @@ pub struct CollectorTrainer {
     /// - 其余情况使用 handwritten 策略
     exploration_rate: f64,
     /// 是否输出详细日志
-    verbose: bool,
+    verbose: bool
 }
 
 impl CollectorTrainer {
@@ -73,7 +72,7 @@ impl CollectorTrainer {
             evaluator: HandwrittenEvaluator::new(),
             collector: RefCell::new(SampleCollector::new()),
             exploration_rate: DEFAULT_EXPLORATION_RATE,
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -83,7 +82,7 @@ impl CollectorTrainer {
             evaluator,
             collector: RefCell::new(SampleCollector::new()),
             exploration_rate: DEFAULT_EXPLORATION_RATE,
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -130,10 +129,7 @@ impl CollectorTrainer {
     /// # 返回
     /// 包含最终分数和所有训练样本的 GameSample
     pub fn take_samples(&self) -> GameSample {
-        let collector = std::mem::replace(
-            &mut *self.collector.borrow_mut(),
-            SampleCollector::new()
-        );
+        let collector = std::mem::replace(&mut *self.collector.borrow_mut(), SampleCollector::new());
         GameSample::from_collector(collector)
     }
 
@@ -152,10 +148,7 @@ impl Default for CollectorTrainer {
 
 impl Trainer<OnsenGame> for CollectorTrainer {
     fn select_action(
-        &self,
-        game: &OnsenGame,
-        actions: &[<OnsenGame as crate::game::Game>::Action],
-        rng: &mut StdRng,
+        &self, game: &OnsenGame, actions: &[<OnsenGame as crate::game::Game>::Action], rng: &mut StdRng
     ) -> Result<usize> {
         use crate::game::onsen::action::OnsenAction;
 
@@ -179,7 +172,9 @@ impl Trainer<OnsenGame> for CollectorTrainer {
                 if self.verbose {
                     debug!(
                         "[回合 {}] 探索：随机选择温泉 {} (共 {} 个)",
-                        game.turn, actions[random_idx], actions.len()
+                        game.turn,
+                        actions[random_idx],
+                        actions.len()
                     );
                 }
                 random_idx
@@ -187,10 +182,7 @@ impl Trainer<OnsenGame> for CollectorTrainer {
                 // 利用：使用 handwritten 策略
                 let strategy_idx = self.evaluator.select_onsen_index(game, actions);
                 if self.verbose {
-                    debug!(
-                        "[回合 {}] 利用：策略选择温泉 {}",
-                        game.turn, actions[strategy_idx]
-                    );
+                    debug!("[回合 {}] 利用：策略选择温泉 {}", game.turn, actions[strategy_idx]);
                 }
                 strategy_idx
             };
@@ -214,7 +206,7 @@ impl Trainer<OnsenGame> for CollectorTrainer {
         let selected_action = self.evaluator.select_action(game, rng);
         let idx = match &selected_action {
             Some(action) => actions.iter().position(|a| a == action).unwrap_or(0),
-            None => 0,
+            None => 0
         };
 
         // 记录到收集器（使用实际选择的动作）
@@ -227,12 +219,7 @@ impl Trainer<OnsenGame> for CollectorTrainer {
         Ok(idx)
     }
 
-    fn select_choice(
-        &self,
-        game: &OnsenGame,
-        choices: &[ActionValue],
-        _rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_choice(&self, game: &OnsenGame, choices: &[ActionValue], _rng: &mut StdRng) -> Result<usize> {
         // 使用 HandwrittenEvaluator 的 evaluate_choice 逻辑
         let mut best_idx = 0;
         let mut best_value = f64::NEG_INFINITY;
@@ -251,12 +238,12 @@ impl Trainer<OnsenGame> for CollectorTrainer {
         if self.verbose {
             debug!(
                 "[回合 {}] 收集：事件选项 {} (共 {} 个)",
-                game.turn, best_idx, choices.len()
+                game.turn,
+                best_idx,
+                choices.len()
             );
         }
 
         Ok(best_idx)
     }
 }
-
-

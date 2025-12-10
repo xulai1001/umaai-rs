@@ -9,24 +9,27 @@
 //! 2. 体力分段评估 - 更精细的体力管理
 //! 3. 羁绊价值提升 - 前期更重视羁绊
 
-use log::info;
-use rand::rngs::StdRng;
-use rand::seq::IndexedRandom;
+use anyhow::Result;
 use colored::Colorize;
+use log::info;
+use rand::{rngs::StdRng, seq::IndexedRandom};
 
-use crate::game::{
-    Game, PersonType,
-    onsen::{action::OnsenAction, game::OnsenGame},
-};
-use crate::gamedata::onsen::ONSENDATA;
 use super::{Evaluator, ValueOutput};
+use crate::{
+    game::{
+        Game,
+        PersonType,
+        onsen::{action::OnsenAction, game::OnsenGame}
+    },
+    gamedata::{GameConfig, onsen::ONSENDATA}
+};
 
 // ============================================================================
 // 常量定义（参考 umaai的手写逻辑）
 // ============================================================================
 
 /// 属性权重 [速度, 耐力, 力量, 根性, 智力]
-/// 速力优先：速度 > 力量 > 耐根 > 智力 （没带智卡） 
+/// 速力优先：速度 > 力量 > 耐根 > 智力 （没带智卡）
 const STATUS_WEIGHTS: [f64; 5] = [8.0, 8.0, 8.0, 8.0, 5.0];
 
 /// 训练类型权重调整 [速度训练, 耐力训练, 力量训练, 根性训练, 智力训练]
@@ -51,16 +54,16 @@ const RESERVE_STATUS_FACTOR: f64 = 40.0;
 const JIBAN_VALUE: f64 = 12.0;
 
 /// 体力价值因子（游戏开始时）
-const VITAL_FACTOR_START: f64 = 7.0;
+const VITAL_FACTOR_START: f64 = 3.5;
 
 /// 体力价值因子（游戏结束时）
-const VITAL_FACTOR_END: f64 = 3.5;
+const VITAL_FACTOR_END: f64 = 2.0;
 
 /// 小失败惩罚值
-const SMALL_FAIL_VALUE: f64 = -1000.0;
+const SMALL_FAIL_VALUE: f64 = -1500.0;
 
 /// 大失败惩罚值
-const BIG_FAIL_VALUE: f64 = -1200.0;
+const BIG_FAIL_VALUE: f64 = -1800.0;
 
 /// 外出加成（干劲不满时）
 const OUTGOING_BONUS_IF_NOT_FULL_MOTIVATION: f64 = 200.0;
@@ -117,38 +120,20 @@ const FRIEND_OUTING_HIGH_COST_PENALTY: f64 = 300.0;
 const FRIEND_OUTING_MID_COST_PENALTY: f64 = 150.0;
 
 /// 友人外出在特定回合区间时的收益，每8回合一组
-const FRIEND_OUTING_TURN_MODIFIER: [f64; 10] = [
-    -400.0, -400.0, -400.0,
-    200.0, 0.0, 200.0,
-    400.0, -400.0, 200.0,
-    -400.0
-];
+const FRIEND_OUTING_TURN_MODIFIER: [f64; 10] =
+    [-400.0, -400.0, -200.0, 200.0, 0.0, 200.0, 400.0, -400.0, 200.0, -400.0];
 
-// ============================================================================
-// 温泉选择顺序（主流攻略）
-// ============================================================================
+/// 第一年无券时的PR分数
+const PR_SCORE: f64 = 100.0;
 
-/// 推荐温泉选择顺序（索引对应 onsen_info 数组）这个要做到配置文件里
-///
-/// 基础温泉(index=0)自动获得，不需要挖掘
-///
-/// 顺序说明：
-/// 疾驰之泉(1) - 速度/力量友情
-/// 明晰之泉(3) - 比赛+30%
-/// 坚忍之泉(2) - 耐力/根性友情
-/// 刚足古泉(5) - 力量/根性友情\
-/// 天翔古泉(7) - 比赛+60%
-/// 骏闪古泉(4) - Hint+100%
-/// 秘汤汤驹(8) - 分身效果
-/// 传说秘泉(9) - 比赛+80%（⭐特殊：第三年9月强制选择）
-/// 坚忍之泉 - 继续挖完
-/// 健壮古泉 - 耐力狗都不点
-const RECOMMENDED_ONSEN_ORDER: [usize; 11] = [
-    1, 3, 2,    // 第一年
-    5, 7, 4,    // 第二年
-    8, 9,    // 第三年
-    4, 2, 6        // 冗余
-];
+/// 第一年无券且有超回复时的PR分数
+const PR_SCORE_SUPER: f64 = 300.0;
+
+/// 速度Build温泉顺序
+const ONSEN_ORDER_SPEED: [u32; 11] = [1, 3, 2, 5, 7, 4, 8, 9, 4, 2, 6];
+
+/// 耐力Build温泉顺序
+const ONSEN_ORDER_STAMINA: [u32; 11] = [1, 3, 2, 5, 6, 4, 8, 9, 4, 2, 7];
 
 /// 设施升级对应温泉
 /// 1. 疾驰 - 砂
@@ -160,9 +145,7 @@ const RECOMMENDED_ONSEN_ORDER: [usize; 11] = [
 /// 7. 天翔 - 土
 /// 8. 秘汤 - 岩
 /// 9. 传说 - 岩
-const RECOMMENDED_TOOL_TYPE: [usize; 9] = [
-    0, 1, 2, 0, 0, 1, 1, 2, 2
-];
+const RECOMMENDED_TOOL_TYPE: [usize; 9] = [0, 1, 2, 0, 0, 1, 1, 2, 2];
 
 /// 挖完秘汤汤驹后，忽略体力计算（后面可以全覆盖）
 const SECRET_ONSEN_INDEX: usize = 8;
@@ -206,9 +189,11 @@ fn calc_vital_factor(turn: i32, max_turn: i32) -> f64 {
 }
 
 /// 统计已挖掘温泉数量
+/*
 fn count_completed_onsen(game: &OnsenGame) -> usize {
     game.onsen_state.iter().filter(|&&x| x).count()
 }
+    */
 
 /// 判断是否应该跳过体力评估惩罚
 ///
@@ -217,6 +202,13 @@ fn count_completed_onsen(game: &OnsenGame) -> usize {
 /// 此时体力管理变得不那么重要，可以移除体力评估的惩罚性因素
 fn should_skip_vital_penalty(game: &OnsenGame) -> bool {
     game.onsen_state[SECRET_ONSEN_INDEX]
+}
+
+pub fn load_onsen_order() -> Result<Vec<u32>> {
+    // 1. 先读取配置文件
+    let config_file = fs_err::read_to_string("game_config.toml")?;
+    let game_config: GameConfig = toml::from_str(&config_file)?;
+    Ok(game_config.onsen_order)
 }
 
 /// 手写启发式评估器
@@ -230,12 +222,8 @@ pub struct HandwrittenEvaluator {
     pub vital_threshold: i32,
     /// 彩圈加成系数
     pub shining_bonus: f64,
-}
-
-impl Default for HandwrittenEvaluator {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// 温泉顺序
+    pub onsen_order: Vec<u32>
 }
 
 impl HandwrittenEvaluator {
@@ -246,6 +234,7 @@ impl HandwrittenEvaluator {
             skill_weight: 0.5,
             vital_threshold: 55,
             shining_bonus: 35.0,
+            onsen_order: load_onsen_order().expect("onsen order")
         }
     }
 
@@ -256,6 +245,7 @@ impl HandwrittenEvaluator {
             skill_weight: 0.5,
             vital_threshold: 55,
             shining_bonus: 35.0,
+            onsen_order: ONSEN_ORDER_SPEED.to_vec()
         }
     }
 
@@ -266,6 +256,7 @@ impl HandwrittenEvaluator {
             skill_weight: 0.5,
             vital_threshold: 55,
             shining_bonus: 35.0,
+            onsen_order: ONSEN_ORDER_STAMINA.to_vec()
         }
     }
 
@@ -285,9 +276,8 @@ impl HandwrittenEvaluator {
         }
 
         // 普通温泉券使用：温泉券>=2，或者体力低于阈值，或者挖了秘汤
-        if game.bathing.ticket_num >= 2 ||
-            game.uma.vital < self.vital_threshold || 
-            game.onsen_state[SECRET_ONSEN_INDEX] {
+        if game.bathing.ticket_num >= 2 || game.uma.vital < self.vital_threshold || game.onsen_state[SECRET_ONSEN_INDEX]
+        {
             //println!("{} {}", game.uma.vital, self.vital_threshold);
             return true;
         }
@@ -346,7 +336,8 @@ impl HandwrittenEvaluator {
     /// 根据设定的优先级，第三年9月会优先选择传说秘泉
     fn select_onsen_by_order(&self, game: &OnsenGame, actions: &[OnsenAction]) -> Option<OnsenAction> {
         // 检查是否有 Dig 动作
-        let dig_actions: Vec<_> = actions.iter()
+        let dig_actions: Vec<_> = actions
+            .iter()
             .filter_map(|a| {
                 if let OnsenAction::Dig(idx) = a {
                     Some(*idx as usize)
@@ -360,8 +351,8 @@ impl HandwrittenEvaluator {
             return None;
         }
         let mut pos = game.turn as usize / 24 * 3;
-        while pos < RECOMMENDED_ONSEN_ORDER.len() {
-            let idx = RECOMMENDED_ONSEN_ORDER[pos];
+        while pos < self.onsen_order.len() {
+            let idx = self.onsen_order[pos] as usize;
             if dig_actions.contains(&idx) {
                 return Some(OnsenAction::Dig(idx as i32));
             }
@@ -383,9 +374,13 @@ impl HandwrittenEvaluator {
     /// 选择的动作在 actions 中的索引
     pub fn select_onsen_index(&self, game: &OnsenGame, actions: &[OnsenAction]) -> usize {
         if let Some(act) = self.select_onsen_by_order(game, actions) {
-            return actions.iter().position(|a| *a == act)
+            return actions
+                .iter()
+                .position(|a| *a == act)
                 .expect("action must contain selected act");
-        } else { 0 }
+        } else {
+            0
+        }
     }
 
     /// 计算属性收益（带上限软约束）
@@ -425,7 +420,7 @@ impl HandwrittenEvaluator {
         // 获取挖掘量
         let dig_value = match game.calc_dig_value(action) {
             Some(v) => v,
-            None => return 0.0,
+            None => return 0.0
         };
 
         // 总挖掘量
@@ -482,10 +477,8 @@ impl HandwrittenEvaluator {
 
         // 失败率惩罚（挖掘完成 7 个温泉后跳过）
         let big_fail_prob = if fail_rate < 20.0 { 0.0 } else { fail_rate };
-        let fail_value_avg = 0.01 * big_fail_prob * BIG_FAIL_VALUE
-            + (1.0 - 0.01 * big_fail_prob) * SMALL_FAIL_VALUE;
+        let fail_value_avg = 0.01 * big_fail_prob * BIG_FAIL_VALUE + (1.0 - 0.01 * big_fail_prob) * SMALL_FAIL_VALUE;
         score = 0.01 * fail_rate * fail_value_avg + (1.0 - 0.01 * fail_rate) * score;
-    
 
         // 彩圈加成
         let shining_count = game.shining_count(train);
@@ -548,31 +541,28 @@ impl HandwrittenEvaluator {
         // 默认有 -100 惩罚，只有以下极端情况才解锁：
         if train == 4 {
             // 计算其他训练的最大人头数
-            let other_max_head: usize = (0..4)
-                .map(|t| game.distribution()[t].len())
-                .max()
-                .unwrap_or(0);
+            let other_max_head: usize = (0..4).map(|t| game.distribution()[t].len()).max().unwrap_or(0);
 
             // 条件1：前期（回合 < 12）且智力人头 >= 3 且其他训练人头都 <= 1
             // 只有其他训练完全没人头时，才考虑前期智力攒羁绊
             if game.turn < EARLY_TURN_THRESHOLD && head_count >= 3 && other_max_head <= 1 {
-                score += 120.0;  // 解锁前期智力训练
+                score += 120.0; // 解锁前期智力训练
             }
 
             // 条件2：智力训练人头 >= 4（超多人头）
             if head_count >= WISDOM_HEAD_THRESHOLD + 1 {
-                score += 80.0;  // 多人头部分解锁
+                score += 80.0; // 多人头部分解锁
             }
 
             // 条件3：智力训练彩圈 >= 3（超多彩圈）
             if shining_count >= WISDOM_SHINING_THRESHOLD {
-                score += 100.0;  // 多彩圈部分解锁
+                score += 100.0; // 多彩圈部分解锁
             }
 
             // 条件4：其他四个训练人头都 <= 1 时，智力人头 >= 3
             // 即：被迫无奈的情况
             if other_max_head <= 1 && head_count >= 3 {
-                score += 80.0;  // 被迫选择智力
+                score += 80.0; // 被迫选择智力
             }
         }
 
@@ -581,14 +571,17 @@ impl HandwrittenEvaluator {
 
     /// 根据当前挖掘的温泉选择装备升级
     pub fn select_upgrade_action(&self, game: &OnsenGame, upgrade_actions: &[OnsenAction]) -> usize {
-        if upgrade_actions.is_empty() {
-            return 0;
-        } else {
-            RECOMMENDED_TOOL_TYPE[game.current_onsen-1]
+        if !upgrade_actions.is_empty() {
+            let recommended = RECOMMENDED_TOOL_TYPE[game.current_onsen - 1];
+            for i in 0..upgrade_actions.len() {
+                if upgrade_actions[i] == OnsenAction::Upgrade(recommended as i32) {
+                    return i;
+                }
+            }
         }
+        0
     }
 }
-
 
 impl Evaluator<OnsenGame> for HandwrittenEvaluator {
     fn select_action(&self, game: &OnsenGame, rng: &mut StdRng) -> Option<OnsenAction> {
@@ -613,7 +606,7 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
 
         // 硬编码规则：温泉券使用
         if actions.iter().any(|a| matches!(a, OnsenAction::UseTicket(true))) {
-                return Some(OnsenAction::UseTicket(self.should_use_ticket(game)));
+            return Some(OnsenAction::UseTicket(self.should_use_ticket(game)));
         }
 
         // 硬编码规则：温泉选择（按主流攻略顺序）
@@ -627,7 +620,7 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
         let vital_before = vital_evaluation(game.uma.vital, game.uma.max_vital);
         let mut best_action: Option<OnsenAction> = None;
         let mut best_value = f64::NEG_INFINITY;
-     //   let mut debug_line = String::new();
+        let mut debug_line = String::new();
 
         for action in &actions {
             let value = match action {
@@ -642,7 +635,8 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                     } else {
                         let vital_gain = 50;
                         let vital_after = (game.uma.vital + vital_gain).min(game.uma.max_vital);
-                        let mut value = vital_factor * (vital_evaluation(vital_after, game.uma.max_vital) - vital_before);
+                        let mut value =
+                            vital_factor * (vital_evaluation(vital_after, game.uma.max_vital) - vital_before);
                         // 休息也有挖掘收益
                         value += self.evaluate_dig_value(game, action);
                         value
@@ -661,7 +655,8 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                     } else {
                         let vital_gain = 10;
                         let vital_after = (game.uma.vital + vital_gain).min(game.uma.max_vital);
-                        let mut value = vital_factor * (vital_evaluation(vital_after, game.uma.max_vital) - vital_before);
+                        let mut value =
+                            vital_factor * (vital_evaluation(vital_after, game.uma.max_vital) - vital_before);
                         if game.uma.motivation < 5 {
                             value += OUTGOING_BONUS_IF_NOT_FULL_MOTIVATION;
                         }
@@ -697,9 +692,7 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                     // 比赛价值评估（参考 action.rs 的实际执行逻辑）
                     let mut value = if game.is_race_turn().unwrap_or(false) {
                         // 目标比赛：使用剧本比赛倍率
-                        let career_multiplier = ONSENDATA.get()
-                            .map(|d| d.career_race_multiplier)
-                            .unwrap_or(1.5);
+                        let career_multiplier = ONSENDATA.get().map(|d| d.career_race_multiplier).unwrap_or(1.5);
                         let career_bonus = (100 + game.scenario_buff.onsen.career_race_bonus) as f64 / 100.0;
                         let mut race_value = RACE_BASE_BONUS * career_multiplier as f64 * career_bonus;
 
@@ -709,7 +702,7 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                         }
                         race_value
                     } else {
-                        NON_TARGET_RACE_BONUS  // 非目标比赛
+                        NON_TARGET_RACE_BONUS // 非目标比赛
                     };
                     // 比赛也有挖掘收益
                     value += self.evaluate_dig_value(game, action);
@@ -717,24 +710,33 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                 }
 
                 OnsenAction::PR => {
-                    // 写死
-                    let mut value = if game.turn < 24 && game.uma.vital < self.vital_threshold {
-                        120.0
-                    } else { -1000.0 };
+                    // 第一年消耗体力越多，PR收益越高，有超回复无券时再加一点
+                    let mut value = if game.turn < 24 {
+                        game.dig_vital_cost as f64 * 1.2
+                    } else {
+                        -1000.0
+                    };
+                    if game.bathing.ticket_num == 0 {
+                        if game.bathing.is_super_ready {
+                            value += PR_SCORE_SUPER;
+                        } else {
+                            value += PR_SCORE;
+                        }
+                    }
                     value += self.evaluate_dig_value(game, action);
                     value
                 }
 
-                _ => -1000.0,
+                _ => -1000.0
             };
 
             if value > best_value {
                 best_value = value;
                 best_action = Some(action.clone());
             }
-           // debug_line += &format!("{action}: {value:.1} ");
+            debug_line += &format!("{action}: {value:.1} ");
         }
-      //  info!("{}", debug_line.cyan());
+        info!("{}", debug_line.cyan());
         best_action.or_else(|| actions.choose(rng).cloned())
     }
 
@@ -773,5 +775,3 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
         0
     }
 }
-
-

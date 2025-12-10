@@ -15,7 +15,7 @@ use rand::prelude::StdRng;
 use crate::{
     game::{Trainer, onsen::game::OnsenGame},
     gamedata::ActionValue,
-    neural::{Evaluator, HandwrittenEvaluator},
+    neural::{Evaluator, HandwrittenEvaluator}
 };
 
 /// 手写策略训练员
@@ -24,7 +24,7 @@ use crate::{
 /// 不经过 MCTS 搜索，执行速度快。
 pub struct HandwrittenTrainer {
     evaluator: HandwrittenEvaluator,
-    verbose: bool,
+    verbose: bool
 }
 
 impl HandwrittenTrainer {
@@ -32,7 +32,7 @@ impl HandwrittenTrainer {
     pub fn new() -> Self {
         Self {
             evaluator: HandwrittenEvaluator::new(),
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -46,7 +46,7 @@ impl HandwrittenTrainer {
     pub fn speed_build() -> Self {
         Self {
             evaluator: HandwrittenEvaluator::speed_build(),
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -54,7 +54,7 @@ impl HandwrittenTrainer {
     pub fn stamina_build() -> Self {
         Self {
             evaluator: HandwrittenEvaluator::stamina_build(),
-            verbose: false,
+            verbose: false
         }
     }
 }
@@ -67,10 +67,7 @@ impl Default for HandwrittenTrainer {
 
 impl Trainer<OnsenGame> for HandwrittenTrainer {
     fn select_action(
-        &self,
-        game: &OnsenGame,
-        actions: &[<OnsenGame as crate::game::Game>::Action],
-        rng: &mut StdRng,
+        &self, game: &OnsenGame, actions: &[<OnsenGame as crate::game::Game>::Action], rng: &mut StdRng
     ) -> Result<usize> {
         use crate::game::onsen::action::OnsenAction;
 
@@ -85,11 +82,7 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
             // 温泉选择：使用硬编码顺序
             let idx = self.evaluator.select_onsen_index(game, actions);
             if self.verbose {
-                info!(
-                    "[回合 {}] 手写策略选择温泉: {}",
-                    game.turn,
-                    actions[idx]
-                );
+                info!("[回合 {}] 手写策略选择温泉: {}", game.turn + 1, actions[idx]);
             }
             return Ok(idx);
         }
@@ -100,11 +93,7 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
             // 装备升级：使用智能升级策略
             let idx = self.evaluator.select_upgrade_action(game, actions);
             if self.verbose {
-                info!(
-                    "[回合 {}] 手写策略选择装备升级: {}",
-                    game.turn,
-                    actions[idx]
-                );
+                info!("[回合 {}] 手写策略选择装备升级: {}", game.turn + 1, actions[idx]);
             }
             return Ok(idx);
         }
@@ -115,26 +104,17 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
         // 找到选中动作在列表中的索引
         let idx = match &selected_action {
             Some(action) => actions.iter().position(|a| a == action).unwrap_or(0),
-            None => 0,
+            None => 0
         };
 
         if self.verbose {
-            info!(
-                "[回合 {}] 手写策略选择: {}",
-                game.turn,
-                actions[idx]
-            );
+            info!("[回合 {}] 手写策略选择: {}", game.turn + 1, actions[idx]);
         }
 
         Ok(idx)
     }
 
-    fn select_choice(
-        &self,
-        game: &OnsenGame,
-        choices: &[ActionValue],
-        _rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_choice(&self, game: &OnsenGame, choices: &[ActionValue], _rng: &mut StdRng) -> Result<usize> {
         // 使用 HandwrittenEvaluator 的 evaluate_choice 逻辑
         let mut best_idx = 0;
         let mut best_value = f64::NEG_INFINITY;
@@ -150,13 +130,10 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
         if self.verbose {
             info!(
                 "[回合 {}] 手写策略选择事件选项: {} (索引 {})",
-                game.turn,
-                choices[best_idx],
-                best_idx
+                game.turn, choices[best_idx], best_idx
             );
         }
 
         Ok(best_idx)
     }
 }
-

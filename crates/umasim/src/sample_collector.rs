@@ -3,9 +3,8 @@
 /// 用于在模拟过程中收集训练数据
 /// 每回合记录游戏状态、选择的动作、事件选项等信息
 /// 游戏结束后根据最终分数生成训练样本
-
 use crate::game::onsen::action::OnsenAction;
-use crate::training_sample::{TrainingSample, NN_INPUT_DIM};
+use crate::training_sample::{NN_INPUT_DIM, TrainingSample};
 
 /// Policy 输出维度
 pub const POLICY_DIM: usize = 50;
@@ -52,11 +51,11 @@ pub struct TurnData {
     /// 事件选项索引（如果有）
     pub choice_idx: Option<usize>,
     /// 事件选项数量
-    pub num_choices: usize,
+    pub num_choices: usize
 }
 
 /// 样本收集器
-/// 
+///
 /// 在游戏过程中收集每回合的决策数据
 /// 游戏结束后生成训练样本
 #[derive(Debug, Clone)]
@@ -66,7 +65,7 @@ pub struct SampleCollector {
     /// 最终分数
     final_score: i32,
     /// 是否已完成
-    is_finished: bool,
+    is_finished: bool
 }
 
 impl SampleCollector {
@@ -75,7 +74,7 @@ impl SampleCollector {
         Self {
             turn_data: Vec::with_capacity(78), // 预分配 78 回合
             final_score: 0,
-            is_finished: false,
+            is_finished: false
         }
     }
 
@@ -94,14 +93,14 @@ impl SampleCollector {
             features,
             global_action_idx,
             choice_idx: None,
-            num_choices: 0,
+            num_choices: 0
         });
     }
 
     /// 记录事件选项选择
-    /// 
+    ///
     /// 在 `record_turn` 之后调用，为当前回合添加事件选项信息
-    /// 
+    ///
     /// # 参数
     /// - `choice_idx`: 选择的事件选项索引
     /// - `num_choices`: 可选事件选项数量
@@ -135,10 +134,10 @@ impl SampleCollector {
     }
 
     /// 生成训练样本
-    /// 
+    ///
     /// 将收集的回合数据转换为训练样本
     /// 每个回合生成一个样本，使用最终分数作为 value target
-    /// 
+    ///
     /// # 返回
     /// 训练样本列表，每个回合一个样本
     pub fn finalize(self) -> Vec<TrainingSample> {
@@ -147,37 +146,35 @@ impl SampleCollector {
         }
 
         let final_score = self.final_score as f32;
-        
-        self.turn_data.into_iter().map(|turn| {
-            // Policy target: one-hot 编码选择的动作（使用全局索引）
-            let mut policy_target = vec![0.0_f32; POLICY_DIM];
-            if turn.global_action_idx < POLICY_DIM {
-                policy_target[turn.global_action_idx] = 1.0;
-            }
 
-            // Choice target: one-hot 编码选择的事件选项
-            let mut choice_target = vec![0.0_f32; 5];
-            if let Some(idx) = turn.choice_idx {
-                if idx < 5 {
-                    choice_target[idx] = 1.0;
+        self.turn_data
+            .into_iter()
+            .map(|turn| {
+                // Policy target: one-hot 编码选择的动作（使用全局索引）
+                let mut policy_target = vec![0.0_f32; POLICY_DIM];
+                if turn.global_action_idx < POLICY_DIM {
+                    policy_target[turn.global_action_idx] = 1.0;
                 }
-            }
 
-            // Value target: [scoreMean, scoreStdev, value]
-            // 使用最终分数作为均值，固定标准差 500
-            let value_target = vec![
-                final_score / 1000.0,  // 归一化分数
-                0.5,                    // 标准差 (500 / 1000)
-                final_score / 1000.0,  // 价值
-            ];
+                // Choice target: one-hot 编码选择的事件选项
+                let mut choice_target = vec![0.0_f32; 5];
+                if let Some(idx) = turn.choice_idx {
+                    if idx < 5 {
+                        choice_target[idx] = 1.0;
+                    }
+                }
 
-            TrainingSample::new(
-                turn.features,
-                policy_target,
-                choice_target,
-                value_target,
-            )
-        }).collect()
+                // Value target: [scoreMean, scoreStdev, value]
+                // 使用最终分数作为均值，固定标准差 500
+                let value_target = vec![
+                    final_score / 1000.0, // 归一化分数
+                    0.5,                  // 标准差 (500 / 1000)
+                    final_score / 1000.0, // 价值
+                ];
+
+                TrainingSample::new(turn.features, policy_target, choice_target, value_target)
+            })
+            .collect()
     }
 }
 
@@ -195,7 +192,7 @@ pub struct GameSample {
     /// 最终分数
     pub final_score: i32,
     /// 所有回合的训练样本
-    pub samples: Vec<TrainingSample>,
+    pub samples: Vec<TrainingSample>
 }
 
 impl GameSample {
@@ -206,6 +203,3 @@ impl GameSample {
         Self { final_score, samples }
     }
 }
-
-
-

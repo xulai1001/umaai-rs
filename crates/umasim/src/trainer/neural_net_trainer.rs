@@ -7,11 +7,14 @@ use anyhow::Result;
 use log::info;
 use rand::rngs::StdRng;
 
-use crate::game::Trainer;
-use crate::game::onsen::action::OnsenAction;
-use crate::game::onsen::game::OnsenGame;
-use crate::gamedata::ActionValue;
-use crate::neural::{Evaluator, NeuralNetEvaluator};
+use crate::{
+    game::{
+        Trainer,
+        onsen::{action::OnsenAction, game::OnsenGame}
+    },
+    gamedata::ActionValue,
+    neural::{Evaluator, NeuralNetEvaluator}
+};
 
 /// 神经网络训练员
 ///
@@ -21,7 +24,7 @@ pub struct NeuralNetTrainer {
     /// 神经网络评估器
     evaluator: NeuralNetEvaluator,
     /// 是否输出详细日志
-    verbose: bool,
+    verbose: bool
 }
 
 impl NeuralNetTrainer {
@@ -34,10 +37,7 @@ impl NeuralNetTrainer {
     /// 加载成功返回 NeuralNetTrainer，失败返回错误
     pub fn load(model_path: &str) -> Result<Self> {
         let evaluator = NeuralNetEvaluator::load(model_path)?;
-        Ok(Self {
-            evaluator,
-            verbose: false,
-        })
+        Ok(Self { evaluator, verbose: false })
     }
 
     /// 设置是否输出详细日志
@@ -48,12 +48,7 @@ impl NeuralNetTrainer {
 }
 
 impl Trainer<OnsenGame> for NeuralNetTrainer {
-    fn select_action(
-        &self,
-        game: &OnsenGame,
-        actions: &[OnsenAction],
-        rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_action(&self, game: &OnsenGame, actions: &[OnsenAction], rng: &mut StdRng) -> Result<usize> {
         if actions.is_empty() {
             anyhow::bail!("没有可选动作");
         }
@@ -79,12 +74,7 @@ impl Trainer<OnsenGame> for NeuralNetTrainer {
         Ok(idx)
     }
 
-    fn select_choice(
-        &self,
-        game: &OnsenGame,
-        choices: &[ActionValue],
-        _rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_choice(&self, game: &OnsenGame, choices: &[ActionValue], _rng: &mut StdRng) -> Result<usize> {
         if choices.is_empty() {
             anyhow::bail!("没有可选选项");
         }
@@ -108,6 +98,3 @@ impl Trainer<OnsenGame> for NeuralNetTrainer {
         Ok(best_idx)
     }
 }
-
-
-

@@ -16,14 +16,13 @@ use anyhow::Result;
 use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::{SeedableRng, rngs::StdRng};
-
 use umasim::{
     game::{Game, InheritInfo, onsen::game::OnsenGame},
     gamedata::{GameConfig, init_global},
     sample_collector::GameSample,
     trainer::CollectorTrainer,
     training_sample::TrainingSampleBatch,
-    utils::init_logger,
+    utils::init_logger
 };
 
 /// 训练数据生成器命令行参数
@@ -49,22 +48,18 @@ struct Args {
 
     /// 随机种子（可选）
     #[arg(long)]
-    seed: Option<u64>,
+    seed: Option<u64>
 }
 
 /// 运行单局游戏并收集样本
-fn run_single_game(
-    trainer: &CollectorTrainer,
-    config: &GameConfig,
-    rng: &mut StdRng,
-) -> Result<GameSample> {
+fn run_single_game(trainer: &CollectorTrainer, config: &GameConfig, rng: &mut StdRng) -> Result<GameSample> {
     // 重置收集器
     trainer.reset();
 
     // 创建游戏
     let inherit = InheritInfo {
         blue_count: config.blue_count.clone(),
-        extra_count: config.extra_count.clone(),
+        extra_count: config.extra_count.clone()
     };
     let mut game = OnsenGame::newgame(config.uma, &config.cards, inherit)?;
 
@@ -96,7 +91,7 @@ fn main() -> Result<()> {
     // 创建随机数生成器
     let mut rng = match args.seed {
         Some(seed) => StdRng::seed_from_u64(seed),
-        None => StdRng::from_os_rng(),
+        None => StdRng::from_os_rng()
     };
 
     // 创建训练员
@@ -110,7 +105,7 @@ fn main() -> Result<()> {
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-            .progress_chars("#>-"),
+            .progress_chars("#>-")
     );
 
     let start = Instant::now();
@@ -178,9 +173,12 @@ fn main() -> Result<()> {
     batch.save_binary(&args.output)?;
 
     let file_size = std::fs::metadata(&args.output)?.len();
-    println!("保存完成: {} ({:.2} MB)", args.output, file_size as f64 / 1024.0 / 1024.0);
+    println!(
+        "保存完成: {} ({:.2} MB)",
+        args.output,
+        file_size as f64 / 1024.0 / 1024.0
+    );
     println!("\n总耗时: {:?}", start.elapsed());
 
     Ok(())
 }
-

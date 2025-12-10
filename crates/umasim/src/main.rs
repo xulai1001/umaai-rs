@@ -22,16 +22,12 @@ use umasim::{
 struct SimulationResult {
     score: i32,
     pt: i32,
-    explain: String,
+    explain: String
 }
 
 /// 运行 OnsenGame（单次），返回模拟结果
 fn run_onsen_once<T: Trainer<OnsenGame>>(
-    trainer: &T,
-    uma: u32,
-    cards: &[u32; 6],
-    inherit: InheritInfo,
-    rng: &mut StdRng
+    trainer: &T, uma: u32, cards: &[u32; 6], inherit: InheritInfo, rng: &mut StdRng
 ) -> Result<SimulationResult> {
     let mut game = OnsenGame::newgame(uma, cards, inherit)?;
     game.run_full_game(trainer, rng)?;
@@ -46,11 +42,7 @@ fn run_onsen_once<T: Trainer<OnsenGame>>(
 
 /// 运行 BasicGame（单次），返回模拟结果
 fn run_basic_once<T: Trainer<BasicGame>>(
-    trainer: &T,
-    uma: u32,
-    cards: &[u32; 6],
-    inherit: InheritInfo,
-    rng: &mut StdRng
+    trainer: &T, uma: u32, cards: &[u32; 6], inherit: InheritInfo, rng: &mut StdRng
 ) -> Result<SimulationResult> {
     let mut game = BasicGame::newgame(uma, cards, inherit)?;
     game.run_full_game(trainer, rng)?;
@@ -70,13 +62,9 @@ fn run_basic_once<T: Trainer<BasicGame>>(
 /// # 探索性策略
 /// 使用 40% 探索率在温泉选择时引入随机性，让神经网络能够
 /// 从不同的挖掘顺序中学习，而不是只记住固定的顺序。
-fn run_collector_mode(
-    config: &GameConfig,
-    num_games: usize,
-    rng: &mut StdRng,
-) -> Result<()> {
+fn run_collector_mode(config: &GameConfig, num_games: usize, rng: &mut StdRng) -> Result<()> {
     // 创建带探索率的训练员
-    let trainer = CollectorTrainer::new();  // 默认 40% 探索率
+    let trainer = CollectorTrainer::new(); // 默认 40% 探索率
 
     println!("=== 样本收集模式 ===");
     println!("模拟次数: {}", num_games);
@@ -92,7 +80,7 @@ fn run_collector_mode(
     pb.set_style(
         ProgressStyle::default_bar()
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")?
-            .progress_chars("#>-"),
+            .progress_chars("#>-")
     );
 
     let start = Instant::now();
@@ -103,7 +91,7 @@ fn run_collector_mode(
 
         let inherit = InheritInfo {
             blue_count: config.blue_count.clone(),
-            extra_count: config.extra_count.clone(),
+            extra_count: config.extra_count.clone()
         };
 
         let mut game = OnsenGame::newgame(config.uma, &config.cards, inherit)?;
@@ -133,9 +121,21 @@ fn run_collector_mode(
         let avg_score = avg as i32;
 
         println!("\n分数统计:");
-        println!("  最高分: {} ({})", max_score, global!(GAMECONSTANTS).get_rank_name(max_score));
-        println!("  最低分: {} ({})", min_score, global!(GAMECONSTANTS).get_rank_name(min_score));
-        println!("  平均分: {:.0} ({})", avg, global!(GAMECONSTANTS).get_rank_name(avg_score));
+        println!(
+            "  最高分: {} ({})",
+            max_score,
+            global!(GAMECONSTANTS).get_rank_name(max_score)
+        );
+        println!(
+            "  最低分: {} ({})",
+            min_score,
+            global!(GAMECONSTANTS).get_rank_name(min_score)
+        );
+        println!(
+            "  平均分: {:.0} ({})",
+            avg,
+            global!(GAMECONSTANTS).get_rank_name(avg_score)
+        );
     }
 
     // 筛选精英样本（Top 5%） 可以根据需求设置 最开始1%太少了太难跑了
@@ -145,7 +145,11 @@ fn run_collector_mode(
     println!("\n精英筛选:");
     println!("  筛选数量: {} 局 (Top 5%)", elite_count);
     if let Some(last) = elite_games.last() {
-        println!("  最低精英分数: {} ({})", last.final_score, global!(GAMECONSTANTS).get_rank_name(last.final_score));
+        println!(
+            "  最低精英分数: {} ({})",
+            last.final_score,
+            global!(GAMECONSTANTS).get_rank_name(last.final_score)
+        );
     }
 
     // 合并样本并保存
@@ -162,7 +166,10 @@ fn run_collector_mode(
     batch.save_binary("training_data.bin")?;
 
     let file_size = std::fs::metadata("training_data.bin")?.len();
-    println!("保存完成: training_data.bin ({:.2} MB)", file_size as f64 / 1024.0 / 1024.0);
+    println!(
+        "保存完成: training_data.bin ({:.2} MB)",
+        file_size as f64 / 1024.0 / 1024.0
+    );
     println!("\n总耗时: {:?}", start.elapsed());
 
     Ok(())
@@ -175,12 +182,8 @@ fn print_simulation_stats(results: &[SimulationResult], elapsed: std::time::Dura
     }
 
     // 找到最高分和最低分
-    let (best_idx, best) = results.iter().enumerate()
-        .max_by_key(|(_, r)| r.score)
-        .unwrap();
-    let (worst_idx, worst) = results.iter().enumerate()
-        .min_by_key(|(_, r)| r.score)
-        .unwrap();
+    let (best_idx, best) = results.iter().enumerate().max_by_key(|(_, r)| r.score).unwrap();
+    let (worst_idx, worst) = results.iter().enumerate().min_by_key(|(_, r)| r.score).unwrap();
 
     // 计算平均分
     let avg_score = results.iter().map(|r| r.score as f64).sum::<f64>() / results.len() as f64;
@@ -236,7 +239,6 @@ async fn main() -> Result<()> {
     init_global()?;
 
     let simulation_count = game_config.simulation_count.max(1);
-    
 
     // 开始计时
     let start = Instant::now();
@@ -256,14 +258,18 @@ async fn main() -> Result<()> {
                 "random" => {
                     let trainer = RandomTrainer;
                     match game_config.scenario.as_str() {
-                        "onsen" => run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng),
+                        "onsen" => {
+                            run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                        }
                         _ => run_basic_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
                     }
                 }
                 "handwritten" => {
                     let trainer = HandwrittenTrainer::new().verbose(simulation_count == 1);
                     match game_config.scenario.as_str() {
-                        "onsen" => run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng),
+                        "onsen" => {
+                            run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                        }
                         _ => {
                             println!("警告: 手写策略训练员仅支持 onsen 剧本，使用 random 训练员");
                             let trainer = RandomTrainer;
@@ -283,11 +289,23 @@ async fn main() -> Result<()> {
                         Ok(trainer) => {
                             let trainer = trainer.verbose(simulation_count == 1);
                             match game_config.scenario.as_str() {
-                                "onsen" => run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng),
+                                "onsen" => run_onsen_once(
+                                    &trainer,
+                                    game_config.uma,
+                                    &game_config.cards,
+                                    inherit.clone(),
+                                    &mut rng
+                                ),
                                 _ => {
                                     println!("警告: 神经网络训练员仅支持 onsen 剧本，使用 random 训练员");
                                     let trainer = RandomTrainer;
-                                    run_basic_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                                    run_basic_once(
+                                        &trainer,
+                                        game_config.uma,
+                                        &game_config.cards,
+                                        inherit.clone(),
+                                        &mut rng
+                                    )
                                 }
                             }
                         }
@@ -305,7 +323,9 @@ async fn main() -> Result<()> {
                     }
                     let trainer = ManualTrainer;
                     let result = match game_config.scenario.as_str() {
-                        "onsen" => run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng),
+                        "onsen" => {
+                            run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                        }
                         _ => run_basic_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
                     }?;
                     // 单次模拟直接打印结果
@@ -320,7 +340,8 @@ async fn main() -> Result<()> {
                     Ok(result)
                 }
             }
-        }).collect();
+        })
+        .collect();
 
     let mut results = vec![];
     for result in sim_results {

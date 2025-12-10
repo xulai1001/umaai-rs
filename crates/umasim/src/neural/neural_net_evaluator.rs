@@ -11,17 +11,17 @@
 //! - scoreStdev = STDEV_SCALE * output[56]
 //! - value = VALUE_MEAN + VALUE_SCALE * output[57]
 
-use anyhow::{Result, Context};
-use rand::rngs::StdRng;
-use rand::Rng;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
+use rand::{Rng, rngs::StdRng};
 use tract_onnx::prelude::*;
 
-use crate::game::Game;
-use crate::game::onsen::action::OnsenAction;
-use crate::game::onsen::game::OnsenGame;
 use super::{Evaluator, ValueOutput};
+use crate::game::{
+    Game,
+    onsen::{action::OnsenAction, game::OnsenGame}
+};
 
 // ============================================================================
 // 常量定义（与 Python config.py 一致）
@@ -64,7 +64,7 @@ type OnnxModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dy
 #[derive(Clone)]
 pub struct NeuralNetEvaluator {
     /// ONNX 模型（使用 Arc 共享，因为 SimplePlan 不可克隆）
-    model: Arc<OnnxModel>,
+    model: Arc<OnnxModel>
 }
 
 impl NeuralNetEvaluator {
@@ -88,9 +88,7 @@ impl NeuralNetEvaluator {
 
         log::info!("ONNX 模型加载成功");
 
-        Ok(Self {
-            model: Arc::new(model),
-        })
+        Ok(Self { model: Arc::new(model) })
     }
 
     /// 执行神经网络推理
@@ -106,17 +104,14 @@ impl NeuralNetEvaluator {
         }
 
         // 创建输入张量 [1, 590]
-        let input = tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features.to_vec())
-            .context("创建输入张量失败")?;
+        let input =
+            tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features.to_vec()).context("创建输入张量失败")?;
 
         // 运行推理
-        let output = self.model.run(tvec!(input.into_tvalue()))
-            .context("推理失败")?;
+        let output = self.model.run(tvec!(input.into_tvalue())).context("推理失败")?;
 
         // 提取输出
-        let output_tensor = output[0]
-            .to_array_view::<f32>()
-            .context("提取输出张量失败")?;
+        let output_tensor = output[0].to_array_view::<f32>().context("提取输出张量失败")?;
 
         let result: Vec<f32> = output_tensor.iter().copied().collect();
 
@@ -148,9 +143,16 @@ impl NeuralNetEvaluator {
     /// 根据 Policy 概率分布采样选择动作索引
     fn sample_action_index(&self, policy: &[f32], legal_mask: &[bool], rng: &mut StdRng) -> usize {
         // 应用合法动作掩码并归一化
-        let mut probs: Vec<f64> = policy.iter()
+        let mut probs: Vec<f64> = policy
+            .iter()
             .enumerate()
-            .map(|(i, &p)| if i < legal_mask.len() && legal_mask[i] { p.max(0.0) as f64 } else { 0.0 })
+            .map(|(i, &p)| {
+                if i < legal_mask.len() && legal_mask[i] {
+                    p.max(0.0) as f64
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         let sum: f64 = probs.iter().sum();
@@ -307,7 +309,7 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
         // 推理
         let output = match self.infer(&features) {
             Ok(o) => o,
-            Err(_) => return 0,
+            Err(_) => return 0
         };
 
         // 提取 Policy
@@ -340,4 +342,3 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
 // NeuralNetEvaluator 通过 Arc 共享模型，是线程安全的
 unsafe impl Send for NeuralNetEvaluator {}
 unsafe impl Sync for NeuralNetEvaluator {}
-

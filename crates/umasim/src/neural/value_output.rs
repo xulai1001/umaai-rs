@@ -18,7 +18,7 @@ pub struct ValueOutput {
     /// 预测分数标准差
     pub score_stdev: f64,
     /// 加权后的价值（考虑激进因子）
-    pub value: f64,
+    pub value: f64
 }
 
 impl ValueOutput {
@@ -27,7 +27,7 @@ impl ValueOutput {
         Self {
             score_mean,
             score_stdev,
-            value: score_mean, // 默认 value = mean
+            value: score_mean // 默认 value = mean
         }
     }
 
@@ -47,7 +47,7 @@ impl ValueOutput {
     pub const ILLEGAL: ValueOutput = ValueOutput {
         score_mean: f64::NEG_INFINITY,
         score_stdev: 0.0,
-        value: f64::NEG_INFINITY,
+        value: f64::NEG_INFINITY
     };
 
     /// 检查是否为非法值
@@ -55,6 +55,3 @@ impl ValueOutput {
         self.score_mean == f64::NEG_INFINITY
     }
 }
-
-
-

@@ -256,10 +256,8 @@ impl OnsenGame {
                 }
             }
         }
-        self.dig_count = self.onsen_state.iter()
-            .filter(|x| **x)
-            .count() as i32;
-        
+        self.dig_count = self.onsen_state.iter().filter(|x| **x).count() as i32;
+
         // 旅馆加成
         let hotel_effect = &onsen_data.hotel_effect;
         let mut j = hotel_effect.len() - 1;
@@ -897,7 +895,7 @@ impl OnsenGame {
         }
     }
 
-/// 提取神经网络输入特征（500 维）
+    /// 提取神经网络输入特征（500 维）
     ///
     /// # 参数
     /// - `pending_choices`: 可选的事件选项列表（用于提取事件选项特征）
@@ -1023,36 +1021,31 @@ impl OnsenGame {
             let base = idx + i * 12;
 
             // 获取静态数据（如果可用）
-            let (unlock_turn, dig_volume, effect_value, main_effect_type) =
-                if let Some(data) = onsen_data {
-                    if let Some(info) = data.onsen_info.get(i) {
-                        // 计算主效果类型（友情加成最高的属性）
-                        let youqing = &info.effect.youqing;
-                        let main_type = youqing.iter()
-                            .enumerate()
-                            .max_by_key(|&(_, v)| *v)
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(0);
+            let (unlock_turn, dig_volume, effect_value, main_effect_type) = if let Some(data) = onsen_data {
+                if let Some(info) = data.onsen_info.get(i) {
+                    // 计算主效果类型（友情加成最高的属性）
+                    let youqing = &info.effect.youqing;
+                    let main_type = youqing
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|&(_, v)| *v)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(0);
 
-                        // 计算效果价值（综合评估）
-                        let value = info.effect.vital as f32 * 2.0
-                            + youqing.iter().sum::<i32>() as f32
-                            + info.effect.career_race_bonus as f32 * 0.5
-                            + info.effect.hint_bonus as f32 * 0.3
-                            + info.effect.split as f32 * 20.0;
+                    // 计算效果价值（综合评估）
+                    let value = info.effect.vital as f32 * 2.0
+                        + youqing.iter().sum::<i32>() as f32
+                        + info.effect.career_race_bonus as f32 * 0.5
+                        + info.effect.hint_bonus as f32 * 0.3
+                        + info.effect.split as f32 * 20.0;
 
-                        (
-                            info.unlock_turn,
-                            info.dig_volume.clone(),
-                            value,
-                            main_type
-                        )
-                    } else {
-                        (0, vec![0, 0, 0], 0.0, 0)
-                    }
+                    (info.unlock_turn, info.dig_volume.clone(), value, main_type)
                 } else {
                     (0, vec![0, 0, 0], 0.0, 0)
-                };
+                }
+            } else {
+                (0, vec![0, 0, 0], 0.0, 0)
+            };
 
             // 1. 是否已解锁（1 维）
             features[base] = if self.turn >= unlock_turn { 1.0 } else { 0.0 };
@@ -1095,10 +1088,12 @@ impl OnsenGame {
             features[base + 10] = difficulty.min(1.0);
 
             // 8. 预计完成回合数（1 维）- 根据当前挖掘力估算
-            let total_remain: i32 = (0..3).map(|j| {
-                let vol = dig_volume.get(j).copied().unwrap_or(0);
-                (vol - progress[j]).max(0)
-            }).sum();
+            let total_remain: i32 = (0..3)
+                .map(|j| {
+                    let vol = dig_volume.get(j).copied().unwrap_or(0);
+                    (vol - progress[j]).max(0)
+                })
+                .sum();
             let est_turns = if avg_dig_power > 0 {
                 total_remain as f32 / avg_dig_power as f32
             } else {
@@ -1199,7 +1194,6 @@ impl OnsenGame {
 
         features
     }
-
 }
 
 impl Game for OnsenGame {
@@ -1441,7 +1435,9 @@ impl Game for OnsenGame {
         for i in 0..5 {
             let mut row = vec![];
             for train in 0..5 {
-                if let Some(id) = dist[train].get(i) && *id >= 0 {
+                if let Some(id) = dist[train].get(i)
+                    && *id >= 0
+                {
                     let mut text = self.persons[*id as usize].explain();
                     if self.is_shining_at(*id as usize, train) {
                         text = format!("+{text}+");
@@ -1682,5 +1678,3 @@ impl Game for OnsenGame {
         Ok(())
     }
 }
-
-

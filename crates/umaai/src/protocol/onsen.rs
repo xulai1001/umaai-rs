@@ -3,7 +3,15 @@ use std::ops::Deref;
 use anyhow::Result;
 use log::warn;
 use serde::{Deserialize, Serialize};
-use umasim::{game::{BasePerson, PersonType, onsen::{BathingInfo, OnsenBuff, OnsenTurnStage, game::OnsenGame}}, gamedata::onsen::ONSENDATA, global};
+use umasim::{
+    game::{
+        BasePerson,
+        PersonType,
+        onsen::{BathingInfo, OnsenBuff, OnsenTurnStage, game::OnsenGame}
+    },
+    gamedata::onsen::ONSENDATA,
+    global
+};
 
 use crate::protocol::{GameStatus, GameStatusBase};
 
@@ -88,7 +96,7 @@ impl GameStatus for GameStatusOnsen {
             warn!("未知回合状态: {}", self.playing_state);
         }
         // 初始化人头
-        let mut persons = vec![];        
+        let mut persons = vec![];
         for (i, card) in base.deck.iter().enumerate() {
             let mut person = BasePerson::try_from(card)?;
             // 对默认转换再过滤一下非剧本友人
@@ -110,7 +118,9 @@ impl GameStatus for GameStatusOnsen {
         persons.push(reporter);
 
         // 温泉信息
-        let dig_blue_count = base.inherit.blue_count
+        let dig_blue_count = base
+            .inherit
+            .blue_count
             .iter()
             .map(|x| (*x as f32 / 3.0).ceil() as i32)
             .collect::<Vec<_>>();
@@ -141,6 +151,5 @@ impl GameStatus for GameStatusOnsen {
             pending_selection: pending
         };
         Ok(ret)
-
     }
 }

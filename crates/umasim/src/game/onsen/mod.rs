@@ -1,6 +1,7 @@
 use colored::Colorize;
 use enum_iterator::Sequence;
 use serde::{Deserialize, Serialize};
+
 use crate::gamedata::onsen::{HotelEffect, OnsenEffect};
 
 pub mod action;

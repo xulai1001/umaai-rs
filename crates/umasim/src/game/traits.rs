@@ -348,9 +348,7 @@ pub trait Game: Clone {
         let basic_motivation = ((self.uma().motivation - 3) * 10) as f32;
         // 成长率
         let b = &self.uma().five_status_bonus;
-        let status_bonus = [
-            b[0], b[1], b[2], b[3], b[4], 0
-        ];
+        let status_bonus = [b[0], b[1], b[2], b[3], b[4], 0];
         let mut ret = ActionValue::default();
         // 副属性
         for i in 0..6 {

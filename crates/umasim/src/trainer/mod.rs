@@ -9,12 +9,12 @@ use crate::{
 };
 
 // 导出手写策略训练员、数据收集训练员和神经网络训练员
-pub mod handwritten_trainer;
 pub mod collector_trainer;
+pub mod handwritten_trainer;
 pub mod neural_net_trainer;
 
-pub use handwritten_trainer::HandwrittenTrainer;
 pub use collector_trainer::CollectorTrainer;
+pub use handwritten_trainer::HandwrittenTrainer;
 pub use neural_net_trainer::NeuralNetTrainer;
 
 /// 猴子训练师

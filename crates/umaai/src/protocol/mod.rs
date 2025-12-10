@@ -4,16 +4,7 @@ use anyhow::Result;
 use log::warn;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use umasim::{
-    game::{
-        BaseGame,
-        FriendOutState,
-        FriendState,
-        InheritInfo,
-        SupportCard,
-        TurnStage,
-        Uma,
-        UmaFlags
-    },
+    game::{BaseGame, FriendOutState, FriendState, InheritInfo, SupportCard, TurnStage, Uma, UmaFlags},
     gamedata::{GAMEDATA, GameConfig},
     global,
     utils::Array5

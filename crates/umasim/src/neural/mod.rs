@@ -34,4 +34,3 @@ pub use evaluator::{Evaluator, RandomEvaluator};
 pub use handwritten_evaluator::HandwrittenEvaluator;
 pub use neural_net_evaluator::NeuralNetEvaluator;
 pub use value_output::ValueOutput;
-
