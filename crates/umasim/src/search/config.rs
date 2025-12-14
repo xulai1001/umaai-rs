@@ -54,17 +54,7 @@ pub struct SearchConfig {
     /// C++ UmaAi 默认值: 1.0
     pub search_cpuct: f64,
 
-    /// 预期搜索标准差
-    ///
-    /// UCB 公式中的常数，用于平衡探索和利用。
-    /// C++ UmaAi 默认值: 2200.0
-    pub expected_search_stdev: f64,
-
-    /// 是否启用激进度随回合调整
-    ///
-    /// - true: 游戏快结束时降低激进度（C++ 方式）
-    /// - false: 使用固定的随机激进度
-    pub adjust_radical_by_turn: bool
+    pub expected_search_stdev: f64
 }
 
 impl Default for SearchConfig {
@@ -78,8 +68,7 @@ impl Default for SearchConfig {
             use_ucb: true,
             search_group_size: 256,
             search_cpuct: 1.0,
-            expected_search_stdev: 2200.0,
-            adjust_radical_by_turn: true // 默认启用激进度调整
+            expected_search_stdev: 2200.0
         }
     }
 }
@@ -93,7 +82,6 @@ impl SearchConfig {
             search_group_size: 256,
             search_cpuct: 1.0,
             expected_search_stdev: 2200.0,
-            adjust_radical_by_turn: true,
             ..Default::default()
         }
     }
@@ -146,12 +134,6 @@ impl SearchConfig {
         self
     }
 
-    /// 启用/禁用激进度随回合调整
-    pub fn with_adjust_radical_by_turn(mut self, enabled: bool) -> Self {
-        self.adjust_radical_by_turn = enabled;
-        self
-    }
-
     pub fn new_game_config(game_config: &GameConfig) -> Self {
         let search_config = SearchConfig::default()
             .with_search_n(game_config.mcts.search_n)
@@ -162,8 +144,7 @@ impl SearchConfig {
             .with_ucb(game_config.mcts.use_ucb)
             .with_search_group_size(game_config.mcts.search_group_size)
             .with_search_cpuct(game_config.mcts.search_cpuct)
-            .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
-            .with_adjust_radical_by_turn(game_config.mcts.adjust_radical_by_turn);
+            .with_expected_search_stdev(game_config.mcts.expected_search_stdev);
         search_config
     }
 }

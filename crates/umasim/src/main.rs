@@ -328,8 +328,7 @@ async fn main() -> Result<()> {
                         .with_ucb(game_config.mcts.use_ucb)
                         .with_search_group_size(game_config.mcts.search_group_size)
                         .with_search_cpuct(game_config.mcts.search_cpuct)
-                        .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
-                        .with_adjust_radical_by_turn(game_config.mcts.adjust_radical_by_turn);
+                        .with_expected_search_stdev(game_config.mcts.expected_search_stdev);
                     let trainer = MctsTrainer::new(search_config).verbose(true);
                     match game_config.scenario.as_str() {
                         "onsen" => {

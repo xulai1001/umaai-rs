@@ -444,10 +444,7 @@ pub struct MctsConfig {
     pub search_cpuct: f64,
     /// 预期搜索标准差
     #[serde(default = "default_mcts_expected_search_stdev")]
-    pub expected_search_stdev: f64,
-    /// 是否启用激进度随回合调整
-    #[serde(default = "default_mcts_adjust_radical_by_turn")]
-    pub adjust_radical_by_turn: bool
+    pub expected_search_stdev: f64
 }
 
 impl Default for MctsConfig {
@@ -460,8 +457,7 @@ impl Default for MctsConfig {
             use_ucb: default_mcts_use_ucb(),
             search_group_size: default_mcts_search_group_size(),
             search_cpuct: default_mcts_search_cpuct(),
-            expected_search_stdev: default_mcts_expected_search_stdev(),
-            adjust_radical_by_turn: default_mcts_adjust_radical_by_turn()
+            expected_search_stdev: default_mcts_expected_search_stdev()
         }
     }
 }
@@ -471,7 +467,7 @@ fn default_mcts_search_n() -> usize {
 }
 
 fn default_mcts_radical_factor_max() -> f64 {
-    50.0 // 默认激进度最大值
+    5.0 // 默认激进度最大值
 }
 
 fn default_mcts_max_depth() -> usize {
@@ -496,10 +492,6 @@ fn default_mcts_search_cpuct() -> f64 {
 
 fn default_mcts_expected_search_stdev() -> f64 {
     2200.0
-}
-
-fn default_mcts_adjust_radical_by_turn() -> bool {
-    true // 默认启用激进度调整
 }
 
 /// 运行配置（临时）

@@ -7,7 +7,7 @@
 
 use anyhow::Result;
 use log::debug;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 
 use super::{
@@ -70,8 +70,8 @@ impl FlatSearch {
             anyhow::bail!("没有可用动作");
         }
 
-        // 计算激进度因子
-        let radical_factor = self.compute_radical_factor(game.turn as usize, rng);
+        // 计算激进度因子（C++ 风格，无随机性）
+        let radical_factor = self.compute_radical_factor(game.turn as usize);
 
         debug!(
             "[回合 {}] 开始搜索: {} 个动作, search_n={}, radical_factor={:.1}, ucb={}",
@@ -94,21 +94,13 @@ impl FlatSearch {
 
     /// 计算激进度因子
     ///
-    /// 根据配置决定是否随回合调整：
-    /// - adjust_radical_by_turn = true: 游戏快结束时降低激进度
-    /// - adjust_radical_by_turn = false: 使用固定的随机激进度
-    fn compute_radical_factor(&self, turn: usize, rng: &mut StdRng) -> f64 {
-        let base_factor = rng.random::<f64>() * self.config.radical_factor_max;
+    /// 使用 C++ UmaAi 的固定公式，不使用随机性：
+    /// radical_factor = (剩余回合 / 总回合)^0.5 * 最大激进度
 
-        if self.config.adjust_radical_by_turn {
-            // C++ UmaAi 的激进度调整公式
-            // 剩余回合越少，激进度越低（更保守）
-            let remain_turns = (TOTAL_TURN.saturating_sub(turn)) as f64;
-            let adjust_factor = (remain_turns / TOTAL_TURN as f64).powf(0.5);
-            base_factor * adjust_factor
-        } else {
-            base_factor
-        }
+    fn compute_radical_factor(&self, turn: usize) -> f64 {
+        let remain_turns = (TOTAL_TURN.saturating_sub(turn)) as f64;
+        let factor = (remain_turns / TOTAL_TURN as f64).powf(0.5);
+        factor * self.config.radical_factor_max
     }
 
     /// 均匀分配搜索（并行化）
