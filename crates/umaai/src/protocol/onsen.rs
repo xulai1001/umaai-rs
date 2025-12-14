@@ -133,6 +133,8 @@ impl GameStatus for GameStatusOnsen {
             }
             dig_progress.push(progress.try_into().expect("Array3"));
         }
+        // 携带5种卡以上才能分身
+        let deck_can_split = base.card_type_count.iter().filter(|x| **x > 0).count() >= 5;
         let ret = OnsenGame {
             base,
             stage,
@@ -148,7 +150,8 @@ impl GameStatus for GameStatusOnsen {
             dig_blue_count: dig_blue_count.try_into().expect("Array5"),
             dig_progress,
             scenario_buff: OnsenBuff::default(),
-            pending_selection: pending
+            pending_selection: pending,
+            deck_can_split
         };
         Ok(ret)
     }

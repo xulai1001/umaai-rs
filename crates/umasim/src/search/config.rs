@@ -1,7 +1,7 @@
 //! 搜索配置
 //!
 //! 定义扁平蒙特卡洛搜索的参数。
-
+use crate::gamedata::GameConfig;
 /// 游戏总回合数
 pub const TOTAL_TURN: usize = 78;
 
@@ -35,7 +35,6 @@ pub struct SearchConfig {
     pub policy_delta: f64,
 
     // ========== UCB 搜索分配参数 ==========
-
     /// 是否启用 UCB 搜索分配
     ///
     /// - true: 使用 UCB 公式动态分配搜索资源（C++ 方式）
@@ -65,14 +64,14 @@ pub struct SearchConfig {
     ///
     /// - true: 游戏快结束时降低激进度（C++ 方式）
     /// - false: 使用固定的随机激进度
-    pub adjust_radical_by_turn: bool,
+    pub adjust_radical_by_turn: bool
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
         Self {
             search_n: 1024,
-            max_depth: 0,  // 搜到终局
+            max_depth: 0, // 搜到终局
             radical_factor_max: 50.0,
             policy_delta: 100.0,
             // UCB 参数（默认启用，使用UCB分配）
@@ -80,7 +79,7 @@ impl Default for SearchConfig {
             search_group_size: 256,
             search_cpuct: 1.0,
             expected_search_stdev: 2200.0,
-            adjust_radical_by_turn: true,  // 默认启用激进度调整
+            adjust_radical_by_turn: true // 默认启用激进度调整
         }
     }
 }
@@ -152,5 +151,19 @@ impl SearchConfig {
         self.adjust_radical_by_turn = enabled;
         self
     }
-}
 
+    pub fn new_game_config(game_config: &GameConfig) -> Self {
+        let search_config = SearchConfig::default()
+            .with_search_n(game_config.mcts.search_n)
+            .with_radical_factor_max(game_config.mcts.radical_factor_max)
+            .with_max_depth(game_config.mcts.max_depth)
+            .with_policy_delta(game_config.mcts.policy_delta)
+            // UCB 参数
+            .with_ucb(game_config.mcts.use_ucb)
+            .with_search_group_size(game_config.mcts.search_group_size)
+            .with_search_cpuct(game_config.mcts.search_cpuct)
+            .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
+            .with_adjust_radical_by_turn(game_config.mcts.adjust_radical_by_turn);
+        search_config
+    }
+}

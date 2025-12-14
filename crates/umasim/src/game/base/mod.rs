@@ -39,7 +39,9 @@ pub struct BaseGame {
     /// 已经触发的事件id和次数
     pub events: HashMap<u32, u32>,
     /// 本回合内还没触发的事件(Hint, 点击友人等)
-    pub unresolved_events: Vec<EventData>
+    pub unresolved_events: Vec<EventData>,
+    /// 每种训练卡数量，用于训练倾向和固有判断
+    pub card_type_count: Arc<[i32; 7]>
 }
 
 impl BaseGame {
@@ -63,6 +65,7 @@ impl BaseGame {
         let mut deck = vec![];
         let mut friend_id = None;
         let mut friend_index = 0;
+        let mut card_type_count = [0; 7];
         // 支援卡
         for (index, id) in deck_ids.iter().enumerate() {
             let card = SupportCard::new(*id)?;
@@ -83,6 +86,10 @@ impl BaseGame {
                 friend_id = Some(*id);
                 friend_index = index;
             }
+            // 记录训练类型
+            if card.card_type < 7 {
+                card_type_count[card.card_type as usize] += 1;
+            }
             deck.push(card);
         }
         // 继承
@@ -102,7 +109,8 @@ impl BaseGame {
             distribution: vec![],
             events: HashMap::new(),
             absent_rate_drop: 0,
-            unresolved_events: vec![]
+            unresolved_events: vec![],
+            card_type_count: Arc::new(card_type_count)
         })
     }
 
@@ -165,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_explain() -> Result<()> {
-        init_logger("debug")?;
+        init_logger("test", "info")?;
         init_global()?;
         let mut game = BaseGame::default();
         game.uma.uma_id = 101901;
@@ -178,7 +186,7 @@ mod tests {
 
     #[test]
     fn test_newgame() -> Result<()> {
-        init_logger("debug")?;
+        init_logger("test", "info")?;
         init_global()?;
         let game = BaseGame::new(101901, &[302424, 302464, 302484, 302564, 302574, 302644], InheritInfo {
             blue_count: [15, 3, 0, 0, 0],

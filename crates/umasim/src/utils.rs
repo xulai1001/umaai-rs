@@ -1,51 +1,35 @@
-use std::io::Write;
+use std::{io::Write, sync::Mutex};
 
 use anyhow::{Result, anyhow};
 use comfy_table::Table;
-use env_logger::Builder;
-use log::LevelFilter;
+use flexi_logger::{DeferredNow, Duplicate, FileSpec, LoggerHandle, style};
+use log::Record;
 use serde::Serialize;
 
-use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA};
+use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA, LOGGER};
 
 pub type Array5 = [i32; 5];
 pub type Array6 = [i32; 6];
 
-/// 初始化日志系统
-///
-/// # 参数
-/// - `level`: 日志级别，"debug" (完整显示) | "off" (全部关闭)
-pub fn init_logger(level: &str) -> Result<()> {
-    let filter = match level.to_lowercase().as_str() {
-        "off" => LevelFilter::Off,
-        "info" => LevelFilter::Info,
-        _ => LevelFilter::Debug // 默认显示全部日志
-    };
+pub fn log_format(w: &mut dyn Write, _now: &mut DeferredNow, record: &Record) -> Result<(), std::io::Error> {
+    let level = record.level();
+    write!(
+        w,
+        "{} {}",
+        style(level).paint(level.to_string()[..1].to_string()),
+        style(level).paint(record.args().to_string())
+    )
+}
 
-    let mut builder = Builder::new();
-    builder.format(|buf, record| {
-        let level_sty = buf.default_level_style(record.level());
-        let level_str = record.level().to_string();
-        writeln!(
-            buf,
-            "{level_sty}{}{level_sty:#} {}",
-            level_str.chars().next().expect("logger"),
-            record.args()
-        )
-        /*
-        let file_str = record.file().map(|f| f.replace("crates\\umasim\\src\\", "")).unwrap_or_default();
-        let line_str = record.line().map(|l| format!(":{l}")).unwrap_or_default();
-        writeln!(buf,
-            "{} {level_sty}{:<5}{level_sty:#} {:<12}{} {}",
-            format!("[{}", chrono::Local::now().format("%y-%m-%d %H:%M:%S.%3f")).bright_black(),
-            record.level(),
-            format!("{file_str}{line_str}").bright_black(),
-            "]".bright_black(),
-            record.args()
-        )
-        */
-    });
-    builder.filter_level(filter).try_init()?;
+pub fn init_logger(app: &str, spec: &str) -> Result<()> {
+    let handle = flexi_logger::Logger::try_with_str(spec)?
+        .format_for_stderr(log_format)
+        .log_to_file(FileSpec::default().directory("logs").basename(app))
+        .duplicate_to_stderr(Duplicate::All)
+        .start()?;
+    LOGGER
+        .set(Mutex::new(handle))
+        .map_err(|_| anyhow!("Logger init failed"))?;
     Ok(())
 }
 

@@ -147,8 +147,7 @@ impl Uma {
     }
 
     pub fn is_race_turn(&self, turn: i32) -> bool {
-        turn == 73 || turn == 75 || turn == 77 ||
-        turn >= 11 && ((1u64 << (turn-11)) & self.career_races != 0)
+        turn == 73 || turn == 75 || turn == 77 || (turn >= 11 && ((1u64 << (turn - 11)) & self.career_races != 0))
     }
 
     /// 计算技能点和总Hint等级换算得到的总pt数，不包括已学习的技能
@@ -183,12 +182,14 @@ impl Uma {
 
 #[cfg(test)]
 mod tests {
+    use log::LevelFilter;
+
     use super::*;
     use crate::gamedata::init_global;
 
     #[test]
     fn test_uma() -> Result<()> {
-        init_logger("info")?;
+        init_logger("test", "info")?;
         init_global()?;
 
         let uma = Uma::new(101901)?;

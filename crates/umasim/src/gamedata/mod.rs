@@ -1,6 +1,11 @@
-use std::{collections::BTreeMap, fmt::Display, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    fmt::Display,
+    sync::{Mutex, OnceLock}
+};
 
 use anyhow::{Result, anyhow};
+use flexi_logger::LoggerHandle;
 use hashbrown::HashMap;
 use log::info;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -8,7 +13,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     explain::Explain,
     global,
-    utils::{Array5, Array6}
+    utils::{Array5, Array6, init_logger}
 };
 
 pub mod onsen;
@@ -428,7 +433,6 @@ pub struct MctsConfig {
     pub policy_delta: f64,
 
     // ========== UCB 搜索分配参数 ==========
-
     /// 是否启用 UCB 搜索分配
     #[serde(default = "default_mcts_use_ucb")]
     pub use_ucb: bool,
@@ -443,7 +447,7 @@ pub struct MctsConfig {
     pub expected_search_stdev: f64,
     /// 是否启用激进度随回合调整
     #[serde(default = "default_mcts_adjust_radical_by_turn")]
-    pub adjust_radical_by_turn: bool,
+    pub adjust_radical_by_turn: bool
 }
 
 impl Default for MctsConfig {
@@ -457,7 +461,7 @@ impl Default for MctsConfig {
             search_group_size: default_mcts_search_group_size(),
             search_cpuct: default_mcts_search_cpuct(),
             expected_search_stdev: default_mcts_expected_search_stdev(),
-            adjust_radical_by_turn: default_mcts_adjust_radical_by_turn(),
+            adjust_radical_by_turn: default_mcts_adjust_radical_by_turn()
         }
     }
 }
@@ -471,11 +475,11 @@ fn default_mcts_radical_factor_max() -> f64 {
 }
 
 fn default_mcts_max_depth() -> usize {
-    0  // 搜到游戏结束
+    0 // 搜到游戏结束
 }
 
 fn default_mcts_policy_delta() -> f64 {
-    100.0 
+    100.0
 }
 
 fn default_mcts_use_ucb() -> bool {
@@ -491,11 +495,11 @@ fn default_mcts_search_cpuct() -> f64 {
 }
 
 fn default_mcts_expected_search_stdev() -> f64 {
-    2200.0 
+    2200.0
 }
 
 fn default_mcts_adjust_radical_by_turn() -> bool {
-    true  // 默认启用激进度调整
+    true // 默认启用激进度调整
 }
 
 /// 运行配置（临时）
@@ -525,7 +529,7 @@ pub struct GameConfig {
     pub onsen_order: Vec<u32>,
     /// MCTS 配置（可选）
     #[serde(default)]
-    pub mcts: MctsConfig,
+    pub mcts: MctsConfig
 }
 
 fn default_scenario() -> String {
@@ -551,7 +555,7 @@ mod tests {
     use anyhow::Result;
 
     use super::*;
-    use crate::utils::{init_logger, make_table};
+    use crate::utils::make_table;
 
     #[test]
     fn test_uma_data() -> Result<()> {
@@ -572,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_consts() -> Result<()> {
-        init_logger("debug")?;
+        init_logger("test", "info")?;
         let consts = GameConstants::load()?;
         println!("{:?}", consts);
 
@@ -583,6 +587,7 @@ mod tests {
 
 pub static GAMEDATA: OnceLock<GameData> = OnceLock::new();
 pub static GAMECONSTANTS: OnceLock<GameConstants> = OnceLock::new();
+pub static LOGGER: OnceLock<Mutex<LoggerHandle>> = OnceLock::new();
 
 pub fn init_global() -> Result<()> {
     GAMEDATA.set(GameData::load()?).expect("global gamedata");

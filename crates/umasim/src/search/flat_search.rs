@@ -7,17 +7,20 @@
 
 use anyhow::Result;
 use log::debug;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 
-use crate::game::onsen::action::OnsenAction;
-use crate::game::onsen::game::OnsenGame;
-use crate::game::Game;
-use crate::neural::{Evaluator, HandwrittenEvaluator};
-
-use super::config::{SearchConfig, TOTAL_TURN};
-use super::result::{ActionResult, SearchOutput};
+use super::{
+    config::{SearchConfig, TOTAL_TURN},
+    result::{ActionResult, SearchOutput}
+};
+use crate::{
+    game::{
+        Game,
+        onsen::{action::OnsenAction, game::OnsenGame}
+    },
+    neural::{Evaluator, HandwrittenEvaluator}
+};
 
 /// 扁平蒙特卡洛搜索
 ///
@@ -28,7 +31,7 @@ pub struct FlatSearch {
     evaluator: HandwrittenEvaluator,
 
     /// 搜索配置
-    config: SearchConfig,
+    config: SearchConfig
 }
 
 impl FlatSearch {
@@ -36,7 +39,7 @@ impl FlatSearch {
     pub fn new(config: SearchConfig) -> Self {
         Self {
             evaluator: HandwrittenEvaluator::new(),
-            config,
+            config
         }
     }
 
@@ -62,9 +65,7 @@ impl FlatSearch {
     ///
     /// # 返回
     /// 搜索输出，包含各动作的分数分布和最优动作
-    pub fn search(&self, game: &OnsenGame, rng: &mut StdRng) -> Result<SearchOutput> {
-        // 获取合法动作列表
-        let actions = game.list_actions()?;
+    pub fn search(&self, game: &OnsenGame, actions: &[OnsenAction], rng: &mut StdRng) -> Result<SearchOutput> {
         if actions.is_empty() {
             anyhow::bail!("没有可用动作");
         }
@@ -88,7 +89,7 @@ impl FlatSearch {
             self.search_uniform(game, &actions)?
         };
 
-        Ok(SearchOutput::new(actions, action_results, radical_factor))
+        Ok(SearchOutput::new(actions.to_vec(), action_results, radical_factor))
     }
 
     /// 计算激进度因子
@@ -98,7 +99,7 @@ impl FlatSearch {
     /// - adjust_radical_by_turn = false: 使用固定的随机激进度
     fn compute_radical_factor(&self, turn: usize, rng: &mut StdRng) -> f64 {
         let base_factor = rng.random::<f64>() * self.config.radical_factor_max;
-        
+
         if self.config.adjust_radical_by_turn {
             // C++ UmaAi 的激进度调整公式
             // 剩余回合越少，激进度越低（更保守）
@@ -113,16 +114,12 @@ impl FlatSearch {
     /// 均匀分配搜索（并行化）
     ///
     /// 每个动作平均分配 search_n 次搜索，使用 Rayon 并行化。
-    fn search_uniform(
-        &self,
-        game: &OnsenGame,
-        actions: &[OnsenAction],
-    ) -> Result<Vec<ActionResult>> {
+    fn search_uniform(&self, game: &OnsenGame, actions: &[OnsenAction]) -> Result<Vec<ActionResult>> {
         let action_results: Vec<ActionResult> = actions
             .par_iter()
             .map(|action| {
                 let mut result = ActionResult::new();
-                
+
                 // 每个线程初始化一次 RNG
                 let mut thread_rng = StdRng::from_os_rng();
                 for _ in 0..self.config.search_n {
@@ -130,7 +127,7 @@ impl FlatSearch {
                         result.add(score);
                     }
                 }
-                
+
                 result
             })
             .collect();
@@ -146,11 +143,7 @@ impl FlatSearch {
     /// # UCB 公式
     /// search_value = value + cpuct * expected_stdev * sqrt(total_n) / n
     fn search_ucb(
-        &self,
-        game: &OnsenGame,
-        actions: &[OnsenAction],
-        radical_factor: f64,
-        _rng: &mut StdRng,
+        &self, game: &OnsenGame, actions: &[OnsenAction], radical_factor: f64, _rng: &mut StdRng
     ) -> Result<Vec<ActionResult>> {
         let num_actions = actions.len();
         let mut action_results: Vec<ActionResult> = vec![ActionResult::new(); num_actions];
@@ -187,11 +180,7 @@ impl FlatSearch {
             }
 
             // 使用 UCB 公式选择下一个要搜索的动作
-            let best_action_idx = self.select_ucb_action(
-                &action_results,
-                radical_factor,
-                total_n,
-            );
+            let best_action_idx = self.select_ucb_action(&action_results, radical_factor, total_n);
 
             // 对选中的动作搜索一组（并行）
             let action = &actions[best_action_idx];
@@ -216,12 +205,7 @@ impl FlatSearch {
     /// 使用 UCB 公式选择下一个要搜索的动作
     ///
     /// UCB 公式: search_value = value + cpuct * expected_stdev * sqrt(total_n) / n
-    fn select_ucb_action(
-        &self,
-        action_results: &[ActionResult],
-        radical_factor: f64,
-        total_n: f64,
-    ) -> usize {
+    fn select_ucb_action(&self, action_results: &[ActionResult], radical_factor: f64, total_n: f64) -> usize {
         let sqrt_total = total_n.sqrt();
         let cpuct = self.config.search_cpuct;
         let expected_stdev = self.config.expected_search_stdev;
@@ -260,28 +244,58 @@ impl FlatSearch {
     ///
     /// # 返回
     /// 最终分数
-    fn simulate(
-        &self,
-        game: &OnsenGame,
-        action: &OnsenAction,
-        rng: &mut StdRng,
-    ) -> Result<f64> {
-        // 克隆游戏状态
+    fn simulate(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
+        if matches!(action, OnsenAction::Dig(_)) {
+            self.simulate_onsen_select(game, action, rng)
+        } else if matches!(action, OnsenAction::Upgrade(_)) {
+            self.simulate_dig_upgrade(game, action, rng)
+        } else {
+            // 克隆游戏状态
+            let mut sim_game = game.clone();
+            let trainer = SimulationTrainer { evaluator: &self.evaluator };
+
+            // 执行初始动作
+            sim_game.apply_action(action, rng)?;
+
+            // 推进到下一阶段，继续运行直到游戏结束
+            while sim_game.next() {
+                sim_game.run_stage(&trainer, rng)?;
+            }
+
+            // 触发育成结束奖励
+            sim_game.on_simulation_end(&trainer, rng)?;
+
+            // 返回最终分数
+            Ok(sim_game.uma().calc_score() as f64)
+        }
+    }
+
+    /// 模拟选择温泉. 因为没有做成单独的阶段，所以单独处理
+    pub fn simulate_onsen_select(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
         let mut sim_game = game.clone();
-        let trainer = SimulationTrainer { evaluator: &self.evaluator };
-
-        // 执行初始动作
+        let mut best_score = 0.0;
+        //let trainer = SimulationTrainer { evaluator: &self.evaluator };
         sim_game.apply_action(action, rng)?;
+        for i in sim_game.get_upgradeable_equipment() {
+            let score = self.simulate_dig_upgrade(&sim_game, &OnsenAction::Upgrade(i as i32), rng)?;
+            if score > best_score {
+                best_score = score;
+            }
+        }
+        Ok(best_score)
+    }
 
-        // 推进到下一阶段，继续运行直到游戏结束
+    /// 模拟升级挖掘装备
+    pub fn simulate_dig_upgrade(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
+        let mut sim_game = game.clone();
+        sim_game.apply_action(action, rng)?;
+        sim_game.pending_selection = false;
+        // 去除pending_selection状态后就可以正常模拟了。
+        let trainer = SimulationTrainer { evaluator: &self.evaluator };
         while sim_game.next() {
             sim_game.run_stage(&trainer, rng)?;
         }
-
-        // 触发育成结束奖励
         sim_game.on_simulation_end(&trainer, rng)?;
-
-        // 返回最终分数
         Ok(sim_game.uma().calc_score() as f64)
     }
 }
@@ -290,16 +304,11 @@ impl FlatSearch {
 ///
 /// 包装 HandwrittenEvaluator，实现 Trainer trait。
 struct SimulationTrainer<'a> {
-    evaluator: &'a HandwrittenEvaluator,
+    evaluator: &'a HandwrittenEvaluator
 }
 
 impl<'a> crate::game::Trainer<OnsenGame> for SimulationTrainer<'a> {
-    fn select_action(
-        &self,
-        game: &OnsenGame,
-        actions: &[OnsenAction],
-        rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_action(&self, game: &OnsenGame, actions: &[OnsenAction], rng: &mut StdRng) -> Result<usize> {
         // 只有一个动作时直接返回
         if actions.len() <= 1 {
             return Ok(0);
@@ -321,17 +330,14 @@ impl<'a> crate::game::Trainer<OnsenGame> for SimulationTrainer<'a> {
         let selected_action = self.evaluator.select_action(game, rng);
         let idx = match &selected_action {
             Some(action) => actions.iter().position(|a| a == action).unwrap_or(0),
-            None => 0,
+            None => 0
         };
 
         Ok(idx)
     }
 
     fn select_choice(
-        &self,
-        game: &OnsenGame,
-        choices: &[crate::gamedata::ActionValue],
-        _rng: &mut StdRng,
+        &self, game: &OnsenGame, choices: &[crate::gamedata::ActionValue], _rng: &mut StdRng
     ) -> Result<usize> {
         // 使用 HandwrittenEvaluator 的 evaluate_choice 逻辑
         let mut best_idx = 0;
@@ -348,6 +354,3 @@ impl<'a> crate::game::Trainer<OnsenGame> for SimulationTrainer<'a> {
         Ok(best_idx)
     }
 }
-
-
-

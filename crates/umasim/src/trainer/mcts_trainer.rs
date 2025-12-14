@@ -8,14 +8,16 @@
 //! - 自对弈训练
 
 use anyhow::Result;
-use log::info;
+use flexi_logger::LogSpecification;
+use log::{info, warn};
 use rand::prelude::StdRng;
 
 use crate::{
     game::{Trainer, onsen::game::OnsenGame},
-    gamedata::ActionValue,
+    gamedata::{ActionValue, LOGGER},
+    global,
     neural::{Evaluator, HandwrittenEvaluator},
-    search::{SearchConfig, FlatSearch},
+    search::{FlatSearch, SearchConfig}
 };
 
 /// MCTS 训练员
@@ -29,7 +31,7 @@ pub struct MctsTrainer {
     /// 手写评估器（用于温泉/装备等特殊场景）
     evaluator: HandwrittenEvaluator,
     /// 是否输出详细日志
-    verbose: bool,
+    verbose: bool
 }
 
 impl MctsTrainer {
@@ -38,7 +40,7 @@ impl MctsTrainer {
         Self {
             search: FlatSearch::new(config),
             evaluator: HandwrittenEvaluator::new(),
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -67,10 +69,7 @@ impl Default for MctsTrainer {
 
 impl Trainer<OnsenGame> for MctsTrainer {
     fn select_action(
-        &self,
-        game: &OnsenGame,
-        actions: &[<OnsenGame as crate::game::Game>::Action],
-        rng: &mut StdRng,
+        &self, game: &OnsenGame, actions: &[<OnsenGame as crate::game::Game>::Action], rng: &mut StdRng
     ) -> Result<usize> {
         use crate::game::onsen::action::OnsenAction;
 
@@ -78,46 +77,53 @@ impl Trainer<OnsenGame> for MctsTrainer {
         if actions.len() <= 1 {
             return Ok(0);
         }
+        /*
+                // 检查是否是温泉选择场景（所有动作都是 Dig）
+                let is_dig = actions.iter().any(|a| matches!(a, OnsenAction::Dig(_)));
+                if is_dig {
+                    // 温泉选择：使用手写逻辑（固定最优顺序）
+                    let idx = self.evaluator.select_onsen_index(game, actions);
+                    if self.verbose {
+                        info!(
+                            "[回合 {}] MCTS 选择温泉（手写逻辑）: {}",
+                            game.turn,
+                            actions[idx]
+                        );
+                    }
+                    return Ok(idx);
+                }
 
-        // 检查是否是温泉选择场景（所有动作都是 Dig）
-        let all_dig = actions.iter().all(|a| matches!(a, OnsenAction::Dig(_)));
-        if all_dig {
-            // 温泉选择：使用手写逻辑（固定最优顺序）
-            let idx = self.evaluator.select_onsen_index(game, actions);
-            if self.verbose {
-                info!(
-                    "[回合 {}] MCTS 选择温泉（手写逻辑）: {}",
-                    game.turn,
-                    actions[idx]
-                );
-            }
-            return Ok(idx);
-        }
-
-        // 检查是否是装备升级场景（所有动作都是 Upgrade）
-        let all_upgrade = actions.iter().all(|a| matches!(a, OnsenAction::Upgrade(_)));
-        if all_upgrade {
-            // 装备升级：使用手写逻辑
-            let idx = self.evaluator.select_upgrade_action(game, actions);
-            if self.verbose {
-                info!(
-                    "[回合 {}] MCTS 选择装备升级（手写逻辑）: {}",
-                    game.turn,
-                    actions[idx]
-                );
-            }
-            return Ok(idx);
-        }
+                // 检查是否是装备升级场景（所有动作都是 Upgrade）
+                let all_upgrade = actions.iter().all(|a| matches!(a, OnsenAction::Upgrade(_)));
+                if all_upgrade {
+                    // 装备升级：使用手写逻辑
+                    let idx = self.evaluator.select_upgrade_action(game, actions);
+                    if self.verbose {
+                        info!(
+                            "[回合 {}] MCTS 选择装备升级（手写逻辑）: {}",
+                            game.turn,
+                            actions[idx]
+                        );
+                    }
+                    return Ok(idx);
+                }
+        */
+        global!(LOGGER)
+            .lock()
+            .expect("logger lock")
+            .push_temp_spec(LogSpecification::off());
 
         // 使用 MCTS 搜索
-        let search_output = self.search.search(game, rng)?;
+        let search_output = self.search.search(game, actions, rng)?;
         let best_action = search_output.best_action();
+
+        global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
 
         if self.verbose {
             // 输出搜索结果
             info!(
                 "[回合 {}] MCTS 搜索完成: search_n={}, radical_factor={:.1}",
-                game.turn,
+                game.turn + 1,
                 self.search.config().search_n,
                 search_output.radical_factor
             );
@@ -126,7 +132,11 @@ impl Trainer<OnsenGame> for MctsTrainer {
             for (i, action) in search_output.actions.iter().enumerate() {
                 let result = &search_output.action_results[i];
                 let weighted = result.weighted_mean(search_output.radical_factor);
-                let marker = if i == search_output.best_action_idx { " <-- 最优" } else { "" };
+                let marker = if i == search_output.best_action_idx {
+                    " <-- 最优"
+                } else {
+                    ""
+                };
                 info!(
                     "  {}: mean={:.0}, weighted={:.0}{}",
                     action,
@@ -143,12 +153,7 @@ impl Trainer<OnsenGame> for MctsTrainer {
         Ok(idx)
     }
 
-    fn select_choice(
-        &self,
-        game: &OnsenGame,
-        choices: &[ActionValue],
-        _rng: &mut StdRng,
-    ) -> Result<usize> {
+    fn select_choice(&self, game: &OnsenGame, choices: &[ActionValue], _rng: &mut StdRng) -> Result<usize> {
         // 事件选择：使用手写逻辑
         let mut best_idx = 0;
         let mut best_value = f64::NEG_INFINITY;
@@ -162,9 +167,9 @@ impl Trainer<OnsenGame> for MctsTrainer {
         }
 
         if self.verbose {
-            info!(
+            warn!(
                 "[回合 {}] MCTS 选择事件选项（手写逻辑）: {} (索引 {})",
-                game.turn,
+                game.turn + 1,
                 choices[best_idx],
                 best_idx
             );
@@ -173,4 +178,3 @@ impl Trainer<OnsenGame> for MctsTrainer {
         Ok(best_idx)
     }
 }
-

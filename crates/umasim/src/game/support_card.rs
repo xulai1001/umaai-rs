@@ -1,9 +1,8 @@
-use std::{collections::HashMap, default::Default};
+use std::{collections::HashMap, default::Default, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 use crate::{
     explain::Explain,
@@ -200,7 +199,6 @@ pub struct SupportCard {
 }
 
 impl SupportCard {
-
     pub fn short_name(&self) -> String {
         format!("{}◆ {}", self.data.short_name(), self.rank)
     }
@@ -326,7 +324,7 @@ mod tests {
 
     #[test]
     fn test_support() -> Result<()> {
-        init_logger("debug")?;
+        init_logger("test", "info")?;
         init_global()?;
         let card = SupportCard::new(302424)?;
         println!("{}", card.explain()?);

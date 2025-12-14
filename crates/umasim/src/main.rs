@@ -233,7 +233,7 @@ async fn main() -> Result<()> {
     let game_config: GameConfig = toml::from_str(&config_file)?;
 
     // 2. 根据配置初始化日志
-    init_logger(&game_config.log_level)?;
+    init_logger("umasim", &game_config.log_level)?;
 
     // 3. 再初始化全局数据
     init_global()?;
@@ -251,10 +251,10 @@ async fn main() -> Result<()> {
     // 收集模拟结果
     let sim_results: Vec<Result<SimulationResult>> = (0..simulation_count)
         .into_par_iter()
-        .map(|_| {
+        .map(|ii| {
             // 执行具体的模拟过程
             let mut rng = StdRng::from_os_rng();
-            match game_config.trainer.as_str() {
+            let ret = match game_config.trainer.as_str() {
                 "random" => {
                     let trainer = RandomTrainer;
                     match game_config.scenario.as_str() {
@@ -330,25 +330,15 @@ async fn main() -> Result<()> {
                         .with_search_cpuct(game_config.mcts.search_cpuct)
                         .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
                         .with_adjust_radical_by_turn(game_config.mcts.adjust_radical_by_turn);
-                    let trainer = MctsTrainer::new(search_config).verbose(false);
+                    let trainer = MctsTrainer::new(search_config).verbose(true);
                     match game_config.scenario.as_str() {
-                        "onsen" => run_onsen_once(
-                            &trainer,
-                            game_config.uma,
-                            &game_config.cards,
-                            inherit.clone(),
-                            &mut rng
-                        ),
+                        "onsen" => {
+                            run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                        }
                         _ => {
                             println!("警告: MCTS 训练员仅支持 onsen 剧本，使用 random 训练员");
                             let trainer = RandomTrainer;
-                            run_basic_once(
-                                &trainer,
-                                game_config.uma,
-                                &game_config.cards,
-                                inherit.clone(),
-                                &mut rng
-                            )
+                            run_basic_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
                         }
                     }
                 }
@@ -375,7 +365,9 @@ async fn main() -> Result<()> {
                     println!("耗时: {:?}", start.elapsed());
                     Ok(result)
                 }
-            }
+            };
+            println!("已完成 {ii} / {simulation_count}");
+            ret
         })
         .collect();
 

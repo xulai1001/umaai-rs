@@ -1,7 +1,5 @@
 /target
 /docs
-
+logs
 /training_data
-/scripts
-
-
+*.pyc

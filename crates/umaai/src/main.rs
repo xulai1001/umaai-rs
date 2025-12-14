@@ -11,11 +11,13 @@ use text_to_ascii_art::to_art;
 use umasim::{
     game::{
         Game,
+        Trainer,
         onsen::{OnsenTurnStage, game::OnsenGame}
     },
-    gamedata::{GameConfig, init_global},
+    gamedata::{GameConfig, MctsConfig, init_global},
     neural::{Evaluator, NeuralNetEvaluator},
-    trainer::NeuralNetTrainer,
+    search::SearchConfig,
+    trainer::{MctsTrainer, NeuralNetTrainer},
     utils::init_logger
 };
 
@@ -54,9 +56,10 @@ async fn main() -> Result<()> {
     // 1. 先读取配置文件
     let config_file = fs_err::read_to_string("game_config.toml")?;
     let game_config: GameConfig = toml::from_str(&config_file)?;
+    let mcts_config = SearchConfig::new_game_config(&game_config);
 
     // 2. 根据配置初始化日志
-    init_logger(&game_config.log_level)?;
+    init_logger("umaai", &game_config.log_level)?;
 
     // 3. 再初始化全局数据
     init_global()?;
@@ -64,9 +67,12 @@ async fn main() -> Result<()> {
     let mut rng = StdRng::from_os_rng();
 
     // 神经网络训练员
-    let model_path = "saved_models/onsen_v1/model.onnx";
-    let evaluator =
-        NeuralNetEvaluator::load(model_path).map_err(|e| anyhow!("错误: 无法加载神经网络模型 {model_path}: {e:?}"))?;
+    //let model_path = "saved_models/onsen_v1/model.onnx";
+    //let evaluator =
+    //NeuralNetEvaluator::load(model_path).map_err(|e| anyhow!("错误: 无法加载神经网络模型 {model_path}: {e:?}"))?;
+
+    // MCTS训练员
+    let trainer = MctsTrainer::new(mcts_config).verbose(false);
 
     // 开始检测文件
     let mut watcher = UraFileWatcher::init()?;
@@ -74,8 +80,11 @@ async fn main() -> Result<()> {
         let contents = watcher.watch("thisTurn.json")?;
         match parse_game::<GameStatusOnsen>(&contents) {
             Ok(game) => {
-                info!("{}", game.explain_distribution()?);
-                run_evaluate(&game, &evaluator, &mut rng)?;
+                println!("{}", game.explain_distribution()?);
+                println!("正在计算...");
+                let actions = game.list_actions()?;
+                let action = trainer.select_action(&game, &actions, &mut rng)?;
+                println!("蒙特卡洛: {}", actions[action]);
             }
             Err(e) => {
                 println!("{}", format!("解析回合信息出错: {e}").red());
@@ -122,7 +131,7 @@ mod tests {
     #[test]
     fn test_urafile() -> Result<()> {
         // 2. 根据配置初始化日志
-        init_logger("info")?;
+        init_logger("test", "info")?;
 
         // 3. 再初始化全局数据
         init_global()?;

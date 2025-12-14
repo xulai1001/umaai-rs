@@ -1046,6 +1046,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "flexi_logger"
+version = "0.31.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31e5335674a3a259527f97e9176a3767dcc9b220b8e29d643daeb2d6c72caf8b"
+dependencies = [
+ "chrono",
+ "log",
+ "nu-ansi-term",
+ "regex",
+ "thiserror",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2168,6 +2181,15 @@ name = "notify-types"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e0826a989adedc2a244799e823aece04662b66609d96af8dff7ac6df9a8925d"
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "num-bigint"
@@ -4139,6 +4161,7 @@ dependencies = [
  "comfy-table",
  "enum-iterator",
  "env_logger",
+ "flexi_logger",
  "fs-err",
  "hashbrown 0.16.1",
  "indicatif",
@@ -4172,6 +4195,7 @@ dependencies = [
  "comfy-table",
  "enum-iterator",
  "env_logger",
+ "flexi_logger",
  "fs-err",
  "hashbrown 0.16.1",
  "indicatif",

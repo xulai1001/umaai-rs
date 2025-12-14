@@ -3,11 +3,13 @@
 //! 定义分数分布统计和搜索输出结构。
 
 use std::cell::Cell;
-use crate::game::onsen::action::OnsenAction;
-use crate::game::onsen::game::OnsenGame;
-use crate::sample_collector::action_to_global_index;
-use crate::training_sample::TrainingSample;
+
 use super::SearchConfig;
+use crate::{
+    game::onsen::{action::OnsenAction, game::OnsenGame},
+    sample_collector::action_to_global_index,
+    training_sample::TrainingSample
+};
 
 /// 最大分数（用于分布直方图）
 const MAX_SCORE: usize = 100000;
@@ -37,9 +39,8 @@ pub struct ActionResult {
     max_score: f64,
 
     // ========== 缓存 ==========
-
     /// 缓存的加权平均分结果: (radical_factor, result)
-    cached_weighted: Cell<Option<(f64, f64)>>,
+    cached_weighted: Cell<Option<(f64, f64)>>
 }
 
 impl Default for ActionResult {
@@ -58,7 +59,7 @@ impl ActionResult {
             sum_sq: 0.0,
             min_score: f64::MAX,
             max_score: f64::MIN,
-            cached_weighted: Cell::new(None),
+            cached_weighted: Cell::new(None)
         }
     }
 
@@ -179,20 +180,12 @@ impl ActionResult {
 
     /// 获取最小分数
     pub fn min(&self) -> f64 {
-        if self.num == 0 {
-            0.0
-        } else {
-            self.min_score
-        }
+        if self.num == 0 { 0.0 } else { self.min_score }
     }
 
     /// 获取最大分数
     pub fn max(&self) -> f64 {
-        if self.num == 0 {
-            0.0
-        } else {
-            self.max_score
-        }
+        if self.num == 0 { 0.0 } else { self.max_score }
     }
 }
 
@@ -211,16 +204,12 @@ pub struct SearchOutput {
     pub best_action_idx: usize,
 
     /// 本次搜索使用的激进度因子
-    pub radical_factor: f64,
+    pub radical_factor: f64
 }
 
 impl SearchOutput {
     /// 创建搜索输出
-    pub fn new(
-        actions: Vec<OnsenAction>,
-        action_results: Vec<ActionResult>,
-        radical_factor: f64,
-    ) -> Self {
+    pub fn new(actions: Vec<OnsenAction>, action_results: Vec<ActionResult>, radical_factor: f64) -> Self {
         // 找到加权平均分最高的动作
         let best_action_idx = action_results
             .iter()
@@ -237,7 +226,7 @@ impl SearchOutput {
             actions,
             action_results,
             best_action_idx,
-            radical_factor,
+            radical_factor
         }
     }
 
@@ -263,9 +252,9 @@ impl SearchOutput {
         // 2. Value Target: 最优动作的搜索结果
         let best = self.best_result();
         let value_target = vec![
-            (best.mean() / 1000.0) as f32,                              // 归一化均值
-            (best.stdev() / 150.0) as f32,                              // 归一化标准差
-            (best.weighted_mean(self.radical_factor) / 1000.0) as f32,  // 归一化加权值
+            (best.mean() / 1000.0) as f32,                             // 归一化均值
+            (best.stdev() / 150.0) as f32,                             // 归一化标准差
+            (best.weighted_mean(self.radical_factor) / 1000.0) as f32, // 归一化加权值
         ];
 
         // 3. Policy Target: softmax(各动作 weighted)
@@ -292,10 +281,7 @@ impl SearchOutput {
         let max_v = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
         // 计算 exp((v - max) / delta)
-        let exp_values: Vec<f64> = values
-            .iter()
-            .map(|v| ((v - max_v) / policy_delta).exp())
-            .collect();
+        let exp_values: Vec<f64> = values.iter().map(|v| ((v - max_v) / policy_delta).exp()).collect();
         let sum: f64 = exp_values.iter().sum();
 
         // 创建 50 维 policy target
@@ -330,5 +316,3 @@ impl SearchOutput {
         }
     }
 }
-
-

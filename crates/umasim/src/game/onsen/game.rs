@@ -62,7 +62,9 @@ pub struct OnsenGame {
     /// 挖掘消耗的体力
     pub dig_vital_cost: i32,
     /// 挖掘完成后待处理选择（装备升级+源泉选择）
-    pub pending_selection: bool
+    pub pending_selection: bool,
+    /// 是否能触发分身
+    pub deck_can_split: bool
 }
 
 impl Deref for OnsenGame {
@@ -141,6 +143,8 @@ impl OnsenGame {
             ret.dig_progress.push([0, 0, 0]); // 初始进度为0
         }
         ret.init_persons()?;
+        // 携带5种卡以上才能分身
+        ret.deck_can_split = ret.card_type_count.iter().filter(|x| **x > 0).count() >= 5;
         Ok(ret)
     }
 
@@ -759,7 +763,7 @@ impl OnsenGame {
         );
 
         // 6. 秘汤汤驹效果：追加支援卡（split效果）
-        if self.scenario_buff.onsen.split > 0 {
+        if self.scenario_buff.onsen.split > 0 && self.deck_can_split {
             // 立即分配并显示更新的训练详情
             self.distribute_extra_supports(rng)?;
         }
@@ -778,7 +782,7 @@ impl OnsenGame {
     /// 每张卡分配到其当前未在的随机一个训练位置（不超过5人）
     pub fn distribute_extra_supports(&mut self, rng: &mut StdRng) -> Result<()> {
         // 检查温泉效果是否激活且有追加支援卡效果
-        if self.bathing.buff_remain_turn == 0 || self.scenario_buff.onsen.split == 0 {
+        if self.bathing.buff_remain_turn == 0 || self.scenario_buff.onsen.split == 0 || !self.deck_can_split {
             return Ok(());
         }
 
@@ -1298,7 +1302,7 @@ impl Game for OnsenGame {
                     Ok(actions)
                 }
             }
-            _ => Err(anyhow!("当前阶段不允许进行Actions: {:?}", self.stage))
+            _ => Ok(vec![])
         }
     }
 

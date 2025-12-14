@@ -186,10 +186,14 @@ impl GameStatusBase {
         let mut uma = self.parse_uma()?;
         let friend = self.parse_friend(scenario_friend_chara_id)?;
         let mut deck = vec![];
+        let mut card_type_count = [0; 7];
         for (index, id) in self.card_id.iter().enumerate() {
             let mut card = SupportCard::new(*id)?;
             card.friendship = self.persons[index].friendship;
             uma.race_bonus += card.effect.saihou;
+            if card.card_type < 7 {
+                card_type_count[card.card_type as usize] += 1;
+            }
             deck.push(card);
         }
         Ok(BaseGame {
@@ -201,6 +205,7 @@ impl GameStatusBase {
             friend,
             train_level_count: self.train_level_count.clone(),
             distribution: self.person_distribution.clone(),
+            card_type_count: Arc::new(card_type_count),
             ..Default::default()
         })
     }

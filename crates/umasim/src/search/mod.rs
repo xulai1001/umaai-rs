@@ -8,10 +8,9 @@
 //! - `flat_search`: 扁平蒙特卡洛搜索实现
 
 mod config;
-mod result;
 mod flat_search;
+mod result;
 
 pub use config::SearchConfig;
-pub use result::{ActionResult, SearchOutput};
 pub use flat_search::FlatSearch;
-
+pub use result::{ActionResult, SearchOutput};

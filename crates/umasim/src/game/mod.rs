@@ -163,12 +163,13 @@ impl FriendState {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::{gamedata::init_global, utils::init_logger};
 
     #[test]
     fn test_friend() -> Result<()> {
-        init_logger("debug")?;
+        init_logger("test", "info")?;
         init_global()?;
         let friend = FriendState::new(Some(302574), 3)?;
         println!("{friend:#?} {}", friend.explain());

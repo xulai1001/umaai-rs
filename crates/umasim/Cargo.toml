@@ -36,7 +36,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
-
+flexi_logger.workspace = true
 # ONNX 推理
 tract-onnx.workspace = true
 ndarray.workspace = true
+

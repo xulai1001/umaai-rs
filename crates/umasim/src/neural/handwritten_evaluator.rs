@@ -28,18 +28,17 @@ use crate::{
 
 /// 属性权重 [速度, 耐力, 力量, 根性, 智力]
 /// 速力优先：速度 > 力量 > 耐根 > 智力 （没带智卡）
-const STATUS_WEIGHTS: [f64; 5] = [8.0, 8.0, 8.0, 8.0, 5.0];
+const STATUS_WEIGHTS: [f64; 5] = [7.0, 8.0, 8.0, 8.0, 6.0];
+
+/// 没带卡的属性权重
+const ABSENT_WEIGHT: f64 = 2.0;
 
 /// 训练类型权重调整 [速度训练, 耐力训练, 力量训练, 根性训练, 智力训练]
 /// 用于额外偏好某些训练类型
-const TRAIN_TYPE_BONUS: [f64; 5] = [20.0, 10.0, 30.0, 30.0, 0.0];
+const TRAIN_TYPE_BONUS: [f64; 5] = [20.0, 10.0, 30.0, 30.0, 20.0];
 
 /// 智力训练人头阈值：智力训练人头数>此值时才考虑选择
-const WISDOM_HEAD_THRESHOLD: usize = 2;
-
-/// 智力训练彩圈阈值：智力训练彩圈数超过此值时额外加成
-/// 提高到1，只有1彩圈以上才有加成
-const WISDOM_SHINING_THRESHOLD: usize = 1;
+const ABSENT_HEAD_THRESHOLD: usize = 2;
 
 /// 前期回合阈值：前期更倾向于智力训练（不怎么消耗体力+攒羁绊+多挖掘回合）
 /// 缩短前期窗口，只有前12回合考虑智力
@@ -88,6 +87,9 @@ const RACE_BASE_BONUS: f64 = 250.0;
 
 /// 非目标比赛基础价值
 const NON_TARGET_RACE_BONUS: f64 = 80.0;
+
+/// 温泉券覆盖生涯比赛的加成
+const RACE_TICKET_BONUS: f64 = 200.0;
 
 /// 狄杜斯角色ID（生涯比赛额外加成）
 const DIDUS_CHARA_ID: u32 = 1063;
@@ -162,9 +164,9 @@ fn status_soft_function(x: f64, reserve: f64) -> f64 {
     if x >= 0.0 {
         0.0
     } else if x > -reserve {
-        -x * x * reserve_inv_x2
+        -x * x * reserve_inv_x2 * 0.5
     } else {
-        x + 0.5 * reserve
+        x + 0.25 * reserve
     }
 }
 
@@ -395,7 +397,12 @@ impl HandwrittenEvaluator {
 
             let s0 = status_soft_function(-remain as f64, reserve);
             let s1 = status_soft_function((gain - remain) as f64, reserve);
-            total += STATUS_WEIGHTS[i] * (s1 - s0);
+            let status_weight = if game.card_type_count[i] > 0 {
+                STATUS_WEIGHTS[i]
+            } else {
+                ABSENT_WEIGHT
+            };
+            total += status_weight * (s1 - s0);
         }
 
         total += train_value[5] as f64 * self.skill_weight;
@@ -535,32 +542,27 @@ impl HandwrittenEvaluator {
         // 基础训练类型加成
         score += TRAIN_TYPE_BONUS[train];
 
-        // 智力训练（train == 4）特殊处理
+        // 没带卡的训练特殊处理
         // 默认有 -100 惩罚，只有以下极端情况才解锁：
-        if train == 4 {
+        if game.card_type_count[train] == 0 {
             // 计算其他训练的最大人头数
             let other_max_head: usize = (0..4).map(|t| game.distribution()[t].len()).max().unwrap_or(0);
 
             // 条件1：前期（回合 < 12）且智力人头 >= 3 且其他训练人头都 <= 1
             // 只有其他训练完全没人头时，才考虑前期智力攒羁绊
-            if game.turn < EARLY_TURN_THRESHOLD && head_count >= 3 && other_max_head <= 1 {
+            if game.turn < EARLY_TURN_THRESHOLD && train == 4 && head_count >= 3 && other_max_head <= 1 {
                 score += 120.0; // 解锁前期智力训练
             }
 
-            // 条件2：智力训练人头 >= 4（超多人头）
-            if head_count >= WISDOM_HEAD_THRESHOLD + 1 {
+            // 条件2：非擅长训练人头 >= 3（超多人头）
+            if head_count >= ABSENT_HEAD_THRESHOLD + 1 {
                 score += 80.0; // 多人头部分解锁
             }
 
-            // 条件3：智力训练彩圈 >= 3（超多彩圈）
-            if shining_count >= WISDOM_SHINING_THRESHOLD {
-                score += 100.0; // 多彩圈部分解锁
-            }
-
-            // 条件4：其他四个训练人头都 <= 1 时，智力人头 >= 3
+            // 条件4：其他四个训练人头都 <= 1 时，非擅长训练人头 >= 3
             // 即：被迫无奈的情况
             if other_max_head <= 1 && head_count >= 3 {
-                score += 80.0; // 被迫选择智力
+                score += 80.0; // 被迫选择非得意训练
             }
         }
 

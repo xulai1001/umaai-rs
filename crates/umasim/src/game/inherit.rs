@@ -56,11 +56,10 @@ impl InheritInfo {
     }
 
     /// 获取局中继承上限 0-8
-    pub fn inherit_limit(&self, rng: &mut StdRng) -> Array5 {
+    pub fn inherit_limit(&self, _rng: &mut StdRng) -> Array5 {
         let mut ret = self.blue_count.clone();
         for i in 0..5 {
-            let limit = (ret[i] as f32 * 5.33) as i32;
-            ret[i] = rng.random_range(0..=limit);
+            ret[i] = (ret[i] as f32 * 5.33) as i32;
         }
         ret
     }

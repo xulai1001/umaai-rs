@@ -79,7 +79,7 @@ fn main() -> Result<()> {
     let config: GameConfig = toml::from_str(&config_file)?;
 
     // 初始化日志（使用 warn 级别减少输出）
-    init_logger("warn")?;
+    init_logger("generate", "info")?;
     init_global()?;
 
     println!("=== 训练数据生成器 ===");
