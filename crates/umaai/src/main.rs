@@ -10,9 +10,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use text_to_ascii_art::to_art;
 use umasim::{
     game::{
-        Game,
-        Trainer,
-        onsen::{OnsenTurnStage, action::OnsenAction, game::OnsenGame}
+        Game, InheritInfo, Trainer, onsen::{OnsenTurnStage, action::OnsenAction, game::OnsenGame}
     },
     gamedata::{GameConfig, MctsConfig, init_global},
     neural::{Evaluator, NeuralNetEvaluator},
@@ -87,6 +85,18 @@ async fn main_guard() -> Result<()> {
         match parse_game::<GameStatusOnsen>(&contents) {
             Ok(mut game) => {
                 //println!("{game:#?}");
+                if game.turn <= 1 {
+                    // 直接模拟一局看得分，或者输出模拟参数
+                    let deck = game.deck.iter()
+                        .map(|card| card.card_id * 10 + card.rank)
+                        .collect::<Vec<_>>();
+                    let inherit = InheritInfo {
+                        blue_count: game.inherit.blue_count.clone(),
+                        extra_count: game.inherit.extra_count.clone()
+                    };
+                    info!("- sim 模拟参数: {} {deck:?}, {inherit:?}", game.uma.uma_id);
+                }
+                //-------------------------------
                 println!("{}", game.explain_distribution()?);
                 println!("正在计算...");
                 if game.pending_selection {

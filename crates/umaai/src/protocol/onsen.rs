@@ -104,6 +104,7 @@ impl GameStatus for GameStatusOnsen {
         let mut persons = vec![];
         for (i, card) in base.deck.iter().enumerate() {
             let mut person = BasePerson::try_from(card)?;
+            person.person_index = i as i32;
             // 对默认转换再过滤一下非剧本友人
             if person.person_type == PersonType::ScenarioCard {
                 if person.chara_id != 9050 {
