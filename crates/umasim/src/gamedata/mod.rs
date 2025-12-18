@@ -384,7 +384,13 @@ pub struct GameConstants {
     /// 红点属性
     pub hint_event_value: Vec<Array6>,
     /// 每张卡最大提供Hint等级
-    pub max_hint_per_card: i32
+    pub max_hint_per_card: i32,
+    /// PT特化时，PT评分倍数
+    pub pt_favor_rate: f32,
+    /// PT特化时，超过1200的属性压缩系数
+    pub five_status_favor_rate: Vec<f32>,
+    /// 蒙特卡洛每回合比手写逻辑增加的分数, 用于修正估分
+    pub mcts_turn_bonus: i32
 }
 
 impl GameConstants {

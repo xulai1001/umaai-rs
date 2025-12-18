@@ -83,13 +83,13 @@ const DIG_BASE_VALUE: f64 = 0.5;
 // ============================================================================
 
 /// 目标比赛基础价值（参考 C++ raceBonus = 150）
-const RACE_BASE_BONUS: f64 = 250.0;
+const RACE_BASE_BONUS: f64 = 450.0;
 
 /// 非目标比赛基础价值
-const NON_TARGET_RACE_BONUS: f64 = 80.0;
+const NON_TARGET_RACE_BONUS: f64 = 180.0;
 
 /// 温泉券覆盖生涯比赛的加成
-const RACE_TICKET_BONUS: f64 = 200.0;
+const RACE_TICKET_BONUS: f64 = 250.0;
 
 /// 狄杜斯角色ID（生涯比赛额外加成）
 const DIDUS_CHARA_ID: u32 = 1063;

@@ -240,8 +240,8 @@ impl SearchOutput {
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
-                let wa = a.1.weighted_mean(self.radical_factor);
-                let wb = b.1.weighted_mean(self.radical_factor);
+                let wa = a.1.mean();    // 不使用weighted，有问题
+                let wb = b.1.mean();
                 wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)

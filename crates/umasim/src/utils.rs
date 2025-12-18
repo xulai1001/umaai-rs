@@ -46,8 +46,8 @@ pub fn check_working_dir() -> Result<()> {
 /// 检测终端类型
 pub fn check_windows_terminal() -> Result<()> {
     if !std::env::var("WT_SESSION").is_ok() {
-        println!("{}", "警告: 当前终端不是Windows Terminal，可能出现乱码或显示不全".yellow());
-        println!("{}", "UmaAI推荐使用Windows Terminal终端，以获得更好的体验".bright_green());
+        println!("{}", "警告: 当前终端不是Windows Terminal或版本太老，可能出现乱码或显示不全".yellow());
+        println!("{}", "UmaAI推荐使用最新版Windows Terminal终端，以获得更好的体验".bright_green());
         pause()?;
     }
     Ok(())

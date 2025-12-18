@@ -17,7 +17,7 @@ use colored::Colorize;
 
 use crate::{
     game::{Trainer, onsen::{action::OnsenAction, game::OnsenGame}},
-    gamedata::{ActionValue, LOGGER},
+    gamedata::{ActionValue, GAMECONSTANTS, LOGGER},
     global,
     neural::{Evaluator, HandwrittenEvaluator},
     search::{ActionResult, FlatSearch, SearchConfig, SearchOutput}, utils::format_luck
@@ -110,6 +110,8 @@ impl MctsTrainer {
         let mut sum = 0.0;
         let mut mean_weighted = 0.0;
         let mut count = 0;
+        // 蒙特卡洛比手写逻辑增加的分数，随回合数递减. 补正在估分上
+        let mcts_bonus = (78 - game.turn) * global!(GAMECONSTANTS).mcts_turn_bonus;
         let best_action = search_output.best_action();
         for r in &search_output.action_results {
             sum += r.0.sum;
@@ -117,7 +119,7 @@ impl MctsTrainer {
             mean_weighted += r.0.weighted_mean(search_output.radical_factor) * r.0.count() as f64;
         }
         mean_weighted /= count as f64;
-        let turn_score = sum / count as f64;
+        let turn_score = sum / count as f64 + mcts_bonus as f64;
         let initial_score = self.initial_score.0.load(Ordering::SeqCst);
         let last_score = self.last_score.0.load(Ordering::SeqCst);
         let luck_overall = turn_score - initial_score as f64;
@@ -133,6 +135,7 @@ impl MctsTrainer {
                 best_score = mean;
             }
         }
+        best_score += mcts_bonus as f64;
         if self.verbose {
             // 输出搜索结果
             let mut line = vec![];
@@ -148,7 +151,7 @@ impl MctsTrainer {
                 line.push(self.format_action_result(
                     action,
                     &result.0,
-                    result.0.mean() - turn_score,
+                    result.0.mean() + mcts_bonus as f64 - turn_score,
                     best_score - turn_score
                 ));
             }
@@ -165,18 +168,22 @@ impl MctsTrainer {
     // 计算本回合PT加成均分
     fn update_score_2(&self, game: &OnsenGame, actions: &[OnsenAction], search_output: &SearchOutput) {    
         let mut sum = 0.0;
-        //let mut mean_weighted = 0.0;
+        let mut mean_weighted = 0.0;
         let mut count = 0;
         let best_action = search_output.best_action_2();
         
         for r in &search_output.action_results {
             sum += r.1.sum;
             count += r.1.count();
-           // mean_weighted += r.1.weighted_mean(search_output.radical_factor) * r.1.count() as f64;
+            mean_weighted += r.1.weighted_mean(search_output.radical_factor) * r.1.count() as f64;
         }
-       // mean_weighted /= count as f64;
+        mean_weighted /= count as f64;
         let turn_score = sum / count as f64;
         let initial_score = self.initial_score.1.load(Ordering::SeqCst);
+        let last_score = self.last_score.1.load(Ordering::SeqCst);
+        //let luck_overall = turn_score - initial_score as f64;
+        //let luck_turn = turn_score - last_score as f64;
+        //let weighted_bonus = mean_weighted - turn_score;
 
         // 找到最优动作在原列表中的索引
         let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
@@ -190,6 +197,11 @@ impl MctsTrainer {
         if self.verbose {
             // 输出搜索结果
             let mut line = vec![];
+            //info!("[回合 {} 重视 PT ] 加权分 {}, 运气: {}(乐观 + {weighted_bonus:.0}), {}",
+            //    game.turn + 1,
+            //    format!("{turn_score:.0}").cyan(),
+            //    format_luck("本局", luck_overall),
+            //    format_luck("本回合", luck_turn));
             // 输出各动作的分数
             for (i, action) in search_output.actions.iter().enumerate() {
                 let result = &search_output.action_results[i];
@@ -268,10 +280,11 @@ impl Trainer<OnsenGame> for MctsTrainer {
         // 使用 MCTS 搜索
         let search_output = self.search.search(game, actions, rng)?; 
         let best_action = search_output.best_action();
+        let best_action_2 = search_output.best_action_2();
         global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
         // 找到最优动作在原列表中的索引
-        let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);        
-
+        //let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);        
+        let idx = actions.iter().position(|a| a == best_action_2).unwrap_or(0);
         self.update_score(game, actions, &search_output);
         self.update_score_2(game, actions, &search_output);
 

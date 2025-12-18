@@ -175,16 +175,16 @@ impl Uma {
 
     pub fn calc_score_with_pt_favor(&self) -> i32 {
         let cons = global!(GAMECONSTANTS);
-        // 技能分x2
+        // 技能分x4
         let mut score = self.skill_score + (self.total_pt() as f32 * cons.pt_score_rate) as i32;
-        score = score * 2;
+        score = ((score as f32) * cons.pt_favor_rate) as i32;
         for i in 0..5 {
-            let status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
-            if i == 2 || i == 3 {   // 降低力根评分
-                score += (cons.five_status_final_score[status] as f32 * 0.7) as i32;
-            } else {
-                score += cons.five_status_final_score[status];
+            let mut status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
+            // 压缩超过1200的部分
+            if status >= 1200 {
+                status = (1200.0 + (status - 1200) as f32 * cons.five_status_favor_rate[i]) as usize;
             }
+            score += cons.five_status_final_score[status];
         }
         score
     }

@@ -121,6 +121,7 @@ impl ActionEnum for OnsenAction {
                     let mut event = system_event(&event_name)?.clone();
                     // 事件面板乘算比赛加成
                     event.choices[0].map_status(|x| (x as f32 * race_bonus).round() as i32);
+                    event.choices[1].map_status(|x| (x as f32 * race_bonus).round() as i32);
                     game.unresolved_events.push(event);
                 }
                 // 执行挖掘（目标比赛25点，非目标比赛15点）
