@@ -13,13 +13,14 @@ use anyhow::Result;
 use flexi_logger::LogSpecification;
 use log::{info, warn};
 use rand::prelude::StdRng;
+use colored::Colorize;
 
 use crate::{
-    game::{Trainer, onsen::game::OnsenGame},
+    game::{Trainer, onsen::{action::OnsenAction, game::OnsenGame}},
     gamedata::{ActionValue, LOGGER},
     global,
     neural::{Evaluator, HandwrittenEvaluator},
-    search::{FlatSearch, SearchConfig}
+    search::{ActionResult, FlatSearch, SearchConfig, SearchOutput}, utils::format_luck
 };
 
 /// MCTS 训练员
@@ -39,9 +40,9 @@ pub struct MctsTrainer {
     /// 保存上一回合游戏，用于判断
     pub last_game: Option<OnsenGame>,
     /// 上一回合最好的选择分数. 使用Atomic以实现内部可变
-    pub last_score: AtomicU64,
+    pub last_score: (AtomicU64, AtomicU64),
     /// 第一回合分数
-    pub initial_score: AtomicU64
+    pub initial_score: (AtomicU64, AtomicU64)
 }
 
 impl MctsTrainer {
@@ -52,9 +53,9 @@ impl MctsTrainer {
             evaluator: HandwrittenEvaluator::new(),
             verbose: false,
             mcts_onsen: false,
-            last_game: None,
-            initial_score: AtomicU64::new(0),
-            last_score: AtomicU64::new(0)
+            last_game: None, 
+            last_score: (AtomicU64::new(0), AtomicU64::new(0)),
+            initial_score: (AtomicU64::new(0), AtomicU64::new(0))
         }
     }
 
@@ -90,6 +91,125 @@ impl MctsTrainer {
         }
         false
     }
+
+    pub fn format_action_result(&self, action: &OnsenAction, result: &ActionResult, score: f64, best_score: f64) -> String {
+        let text = format!("{action}: {score:.0}");
+        let delta = best_score - score;
+        if delta <= 0.0 {
+            format!("{}", text.bright_yellow().on_red())
+        } else if delta <= 50.0 {
+            format!("{}", text.green())
+        } else if delta <= 300.0 {
+            text
+        } else {
+            format!("{}", text.bright_black())
+        }
+    }
+    // 计算本回合均分
+    fn update_score(&self, game: &OnsenGame, actions: &[OnsenAction], search_output: &SearchOutput) {    
+        let mut sum = 0.0;
+        let mut mean_weighted = 0.0;
+        let mut count = 0;
+        let best_action = search_output.best_action();
+        for r in &search_output.action_results {
+            sum += r.0.sum;
+            count += r.0.count();
+            mean_weighted += r.0.weighted_mean(search_output.radical_factor) * r.0.count() as f64;
+        }
+        mean_weighted /= count as f64;
+        let turn_score = sum / count as f64;
+        let initial_score = self.initial_score.0.load(Ordering::SeqCst);
+        let last_score = self.last_score.0.load(Ordering::SeqCst);
+        let luck_overall = turn_score - initial_score as f64;
+        let luck_turn = turn_score - last_score as f64;
+        let weighted_bonus = mean_weighted - turn_score;
+
+        // 找到最优动作在原列表中的索引
+        let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
+        let mut best_score = search_output.action_results[idx].0.mean();
+        for (i, _action) in search_output.actions.iter().enumerate() {
+            let mean = search_output.action_results[i].0.mean();
+            if mean > best_score {
+                best_score = mean;
+            }
+        }
+        if self.verbose {
+            // 输出搜索结果
+            let mut line = vec![];
+            info!("[回合 {}] 均分 {}, 运气: {}(乐观 + {weighted_bonus:.0}), {}",
+                game.turn + 1,
+                format!("{turn_score:.0}").cyan(),
+                format_luck("本局", luck_overall),
+                format_luck("本回合", luck_turn));
+            // 输出各动作的分数
+            for (i, action) in search_output.actions.iter().enumerate() {
+                let result = &search_output.action_results[i];
+                //let weighted = result.0.weighted_mean(search_output.radical_factor);
+                line.push(self.format_action_result(
+                    action,
+                    &result.0,
+                    result.0.mean() - turn_score,
+                    best_score - turn_score
+                ));
+            }
+            info!("[回合 {} 重视评分] {}", game.turn + 1, line.join(" "));
+        }
+
+        // 保存分数
+        self.last_score.0.store(turn_score as u64, Ordering::SeqCst);
+        if initial_score == 0 {
+            self.initial_score.0.store(turn_score as u64, Ordering::SeqCst);
+        }
+    }
+
+    // 计算本回合PT加成均分
+    fn update_score_2(&self, game: &OnsenGame, actions: &[OnsenAction], search_output: &SearchOutput) {    
+        let mut sum = 0.0;
+        //let mut mean_weighted = 0.0;
+        let mut count = 0;
+        let best_action = search_output.best_action_2();
+        
+        for r in &search_output.action_results {
+            sum += r.1.sum;
+            count += r.1.count();
+           // mean_weighted += r.1.weighted_mean(search_output.radical_factor) * r.1.count() as f64;
+        }
+       // mean_weighted /= count as f64;
+        let turn_score = sum / count as f64;
+        let initial_score = self.initial_score.1.load(Ordering::SeqCst);
+
+        // 找到最优动作在原列表中的索引
+        let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
+        let mut best_score = search_output.action_results[idx].1.mean();
+        for (i, _action) in search_output.actions.iter().enumerate() {
+            let mean = search_output.action_results[i].1.mean();
+            if mean > best_score {
+                best_score = mean;
+            }
+        }
+        if self.verbose {
+            // 输出搜索结果
+            let mut line = vec![];
+            // 输出各动作的分数
+            for (i, action) in search_output.actions.iter().enumerate() {
+                let result = &search_output.action_results[i];
+                //let weighted = result.0.weighted_mean(search_output.radical_factor);
+                line.push(self.format_action_result(
+                    action,
+                    &result.1,
+                    result.1.mean() - turn_score,
+                    best_score - turn_score
+                ));
+            }
+            info!("[回合 {} 重视 PT ] {}", game.turn + 1, line.join(" "));
+        }
+
+        // 保存分数
+        self.last_score.1.store(turn_score as u64, Ordering::SeqCst);
+        if initial_score == 0 {
+            self.initial_score.1.store(turn_score as u64, Ordering::SeqCst);
+        }
+    }
 }
 
 impl Default for MctsTrainer {
@@ -108,6 +228,8 @@ impl Trainer<OnsenGame> for MctsTrainer {
         if actions.len() <= 1 {
             return Ok(0);
         }
+        //println!("{game:#?}");
+
         // 检查是否是温泉选择场景（动作是 Dig）
         let is_dig = actions.iter().any(|a| matches!(a, OnsenAction::Dig(_)));
         if is_dig && !self.mcts_onsen {
@@ -123,9 +245,7 @@ impl Trainer<OnsenGame> for MctsTrainer {
             return Ok(idx);
         }
         /*
-
-
-                // 检查是否是装备升级场景（所有动作都是 Upgrade）
+            // 检查是否是装备升级场景（所有动作都是 Upgrade）
                 let all_upgrade = actions.iter().all(|a| matches!(a, OnsenAction::Upgrade(_)));
                 if all_upgrade {
                     // 装备升级：使用手写逻辑
@@ -146,49 +266,14 @@ impl Trainer<OnsenGame> for MctsTrainer {
             .push_temp_spec(LogSpecification::off());
 
         // 使用 MCTS 搜索
-        let search_output = self.search.search(game, actions, rng)?;
+        let search_output = self.search.search(game, actions, rng)?; 
         let best_action = search_output.best_action();
-
         global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
-
-        // 计算本回合均分
-        let mut sum = 0.0;
-        let mut mean_weighted = 0.0;
-        let mut count = 0;
-        for r in &search_output.action_results {
-            sum += r.sum;
-            count += r.count();
-            mean_weighted += r.weighted_mean(search_output.radical_factor) * r.count() as f64;
-        }
-        mean_weighted /= count as f64;
-        let turn_score = sum / count as f64;
-        let initial_score = self.initial_score.load(Ordering::SeqCst);
-        let last_score = self.last_score.load(Ordering::SeqCst);
-        let luck_overall = turn_score - initial_score as f64;
-        let luck_turn = turn_score - last_score as f64;
-        let weighted_bonus = mean_weighted - turn_score;
-
-        if self.verbose {
-            // 输出搜索结果
-            let mut line = vec![];
-            info!("[回合 {}] 均分 {turn_score:.0}, 运气: 本局 {luck_overall:.0}(乐观 + {weighted_bonus:.0}), 本回合 {luck_turn:.0}", game.turn + 1);
-            // 输出各动作的分数
-            for (i, action) in search_output.actions.iter().enumerate() {
-                let result = &search_output.action_results[i];
-                let weighted = result.weighted_mean(search_output.radical_factor);
-                line.push(format!("{action}: {:.0}", result.mean() - turn_score));
-            }
-            info!("[回合 {}] {}", game.turn + 1, line.join(" "));
-        }
-
         // 找到最优动作在原列表中的索引
-        let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
+        let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);        
 
-        // 保存分数
-        self.last_score.store(turn_score as u64, Ordering::SeqCst);
-        if initial_score == 0 {
-            self.initial_score.store(turn_score as u64, Ordering::SeqCst);
-        }
+        self.update_score(game, actions, &search_output);
+        self.update_score_2(game, actions, &search_output);
 
         Ok(idx)
     }

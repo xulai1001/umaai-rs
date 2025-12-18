@@ -106,25 +106,24 @@ impl FlatSearch {
     /// 均匀分配搜索（并行化）
     ///
     /// 每个动作平均分配 search_n 次搜索，使用 Rayon 并行化。
-    fn search_uniform(&self, game: &OnsenGame, actions: &[OnsenAction]) -> Result<Vec<ActionResult>> {
-        let action_results: Vec<ActionResult> = actions
+    fn search_uniform(&self, game: &OnsenGame, actions: &[OnsenAction]) -> Result<Vec<(ActionResult, ActionResult)>> {
+        let ret = actions
             .par_iter()
             .map(|action| {
                 let mut result = ActionResult::new();
-
+                let mut result_pt = ActionResult::new();
                 // 每个线程初始化一次 RNG
                 let mut thread_rng = StdRng::from_os_rng();
                 for _ in 0..self.config.search_n {
                     if let Ok(score) = self.simulate(game, action, &mut thread_rng) {
-                        result.add(score);
+                        result.add(score.0);
+                        result_pt.add(score.1);
                     }
                 }
-
-                result
+                (result, result_pt)
             })
             .collect();
-
-        Ok(action_results)
+        Ok(ret)
     }
 
     /// UCB 动态分配搜索
@@ -136,23 +135,25 @@ impl FlatSearch {
     /// search_value = value + cpuct * expected_stdev * sqrt(total_n) / n
     fn search_ucb(
         &self, game: &OnsenGame, actions: &[OnsenAction], radical_factor: f64, _rng: &mut StdRng
-    ) -> Result<Vec<ActionResult>> {
+    ) -> Result<Vec<(ActionResult, ActionResult)>> {
         let num_actions = actions.len();
-        let mut action_results: Vec<ActionResult> = vec![ActionResult::new(); num_actions];
+        let mut action_results: Vec<(ActionResult, ActionResult)> = vec![Default::default();num_actions];
         let group_size = self.config.search_group_size;
 
         // 第一阶段：每个动作先搜一组（并行）
-        let initial_results: Vec<ActionResult> = actions
+        let initial_results: Vec<_> = actions
             .par_iter()
             .map(|action| {
                 let mut result = ActionResult::new();
+                let mut result_pt = ActionResult::new();
                 let mut thread_rng = StdRng::from_os_rng();
                 for _ in 0..group_size {
                     if let Ok(score) = self.simulate(game, action, &mut thread_rng) {
-                        result.add(score);
+                        result.add(score.0);
+                        result_pt.add(score.1);
                     }
                 }
-                result
+                (result, result_pt)
             })
             .collect();
 
@@ -166,7 +167,7 @@ impl FlatSearch {
         // 第二阶段：UCB 动态分配
         loop {
             // 检查是否有动作达到 search_n
-            let max_count = action_results.iter().map(|r| r.count()).max().unwrap_or(0);
+            let max_count = action_results.iter().map(|r| r.0.count()).max().unwrap_or(0);
             if max_count >= self.config.search_n as u32 {
                 break;
             }
@@ -176,7 +177,7 @@ impl FlatSearch {
 
             // 对选中的动作搜索一组（并行）
             let action = &actions[best_action_idx];
-            let scores: Vec<f64> = (0..group_size)
+            let scores: Vec<_> = (0..group_size)
                 .into_par_iter()
                 .filter_map(|_| {
                     let mut thread_rng = StdRng::from_os_rng();
@@ -185,7 +186,8 @@ impl FlatSearch {
                 .collect();
 
             for score in scores {
-                action_results[best_action_idx].add(score);
+                action_results[best_action_idx].0.add(score.0);
+                action_results[best_action_idx].1.add(score.1);
             }
 
             total_n += group_size as f64;
@@ -197,7 +199,7 @@ impl FlatSearch {
     /// 使用 UCB 公式选择下一个要搜索的动作
     ///
     /// UCB 公式: search_value = value + cpuct * expected_stdev * sqrt(total_n) / n
-    fn select_ucb_action(&self, action_results: &[ActionResult], radical_factor: f64, total_n: f64) -> usize {
+    fn select_ucb_action(&self, action_results: &[(ActionResult, ActionResult)], radical_factor: f64, total_n: f64) -> usize {
         let sqrt_total = total_n.sqrt();
         let cpuct = self.config.search_cpuct;
         let expected_stdev = self.config.expected_search_stdev;
@@ -206,13 +208,13 @@ impl FlatSearch {
         let mut best_search_value = f64::NEG_INFINITY;
 
         for (i, result) in action_results.iter().enumerate() {
-            let n = result.count() as f64;
+            let n = result.0.count() as f64;
             if n == 0.0 {
                 // 未搜索的动作优先级最高
                 return i;
             }
 
-            let value = result.weighted_mean(radical_factor);
+            let value = result.0.weighted_mean(radical_factor);
             // UCB 公式：value 越高或搜索次数越少，search_value 越高
             let search_value = value + cpuct * expected_stdev * sqrt_total / n;
 
@@ -236,7 +238,7 @@ impl FlatSearch {
     ///
     /// # 返回
     /// 最终分数
-    fn simulate(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
+    fn simulate(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<(f64, f64)> {
         if matches!(action, OnsenAction::Dig(_)) {
             self.simulate_onsen_select(game, action, rng)
         } else if matches!(action, OnsenAction::Upgrade(_)) {
@@ -258,19 +260,19 @@ impl FlatSearch {
             sim_game.on_simulation_end(&trainer, rng)?;
 
             // 返回最终分数
-            Ok(sim_game.uma().calc_score() as f64)
+            Ok((sim_game.uma().calc_score() as f64, sim_game.uma().calc_score_with_pt_favor() as f64))
         }
     }
 
     /// 模拟选择温泉. 因为没有做成单独的阶段，所以单独处理
-    pub fn simulate_onsen_select(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
+    pub fn simulate_onsen_select(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<(f64, f64)> {
         let mut sim_game = game.clone();
-        let mut best_score = 0.0;
+        let mut best_score = (0.0, 0.0);
         //let trainer = SimulationTrainer { evaluator: &self.evaluator };
         sim_game.apply_action(action, rng)?;
         for i in sim_game.get_upgradeable_equipment() {
             let score = self.simulate_dig_upgrade(&sim_game, &OnsenAction::Upgrade(i as i32), rng)?;
-            if score > best_score {
+            if score.0 > best_score.0 {
                 best_score = score;
             }
         }
@@ -278,7 +280,7 @@ impl FlatSearch {
     }
 
     /// 模拟升级挖掘装备
-    pub fn simulate_dig_upgrade(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<f64> {
+    pub fn simulate_dig_upgrade(&self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng) -> Result<(f64, f64)> {
         let mut sim_game = game.clone();
         sim_game.apply_action(action, rng)?;
         sim_game.pending_selection = false;
@@ -288,7 +290,7 @@ impl FlatSearch {
             sim_game.run_stage(&trainer, rng)?;
         }
         sim_game.on_simulation_end(&trainer, rng)?;
-        Ok(sim_game.uma().calc_score() as f64)
+        Ok((sim_game.uma().calc_score() as f64, sim_game.uma().calc_score_with_pt_favor() as f64))
     }
 }
 

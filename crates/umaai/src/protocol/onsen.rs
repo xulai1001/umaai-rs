@@ -140,7 +140,7 @@ impl GameStatus for GameStatusOnsen {
         }
         // 携带5种卡以上才能分身
         let deck_can_split = base.card_type_count.iter().filter(|x| **x > 0).count() >= 5;
-        let ret = OnsenGame {
+        let mut ret = OnsenGame {
             base,
             stage,
             persons,
@@ -148,7 +148,7 @@ impl GameStatus for GameStatusOnsen {
             bathing: BathingInfo::from(&self.onsen.bathing),
             onsen_state: self.onsen.onsen_state,
             dig_remain: self.onsen.dig_remain,
-            dig_count: self.onsen.dig_count,
+            dig_count: self.onsen.dig_count + 1,    // 包含默认泉
             dig_power: self.onsen.dig_power,
             dig_level: self.onsen.dig_level,
             dig_vital_cost: self.onsen.dig_vital_cost,
@@ -158,6 +158,8 @@ impl GameStatus for GameStatusOnsen {
             pending_selection: pending,
             deck_can_split
         };
+        // 刷新温泉Buff
+        ret.update_scenario_buff(true);
         Ok(ret)
     }
 }

@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::{
     explain::Explain,
     global,
-    utils::{Array5, Array6, init_logger}
+    utils::{Array5, Array6}
 };
 
 pub mod onsen;
@@ -546,11 +546,10 @@ fn default_simulation_count() -> usize {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
     use anyhow::Result;
 
     use super::*;
-    use crate::utils::make_table;
+    use crate::utils::{init_logger, make_table};
 
     #[test]
     fn test_uma_data() -> Result<()> {

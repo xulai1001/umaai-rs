@@ -30,6 +30,7 @@ fn run_onsen_once<T: Trainer<OnsenGame>>(
     trainer: &T, uma: u32, cards: &[u32; 6], inherit: InheritInfo, rng: &mut StdRng
 ) -> Result<SimulationResult> {
     let mut game = OnsenGame::newgame(uma, cards, inherit)?;
+   // println!("{game:#?}");
     game.run_full_game(trainer, rng)?;
     info!("育成结束！");
 
@@ -329,6 +330,7 @@ async fn main() -> Result<()> {
                         .with_search_group_size(game_config.mcts.search_group_size)
                         .with_search_cpuct(game_config.mcts.search_cpuct)
                         .with_expected_search_stdev(game_config.mcts.expected_search_stdev);
+                    // info!("search_config = {search_config:?}");
                     let trainer = MctsTrainer::new(search_config).verbose(true);
                     match game_config.scenario.as_str() {
                         "onsen" => {

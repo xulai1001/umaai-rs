@@ -75,6 +75,25 @@ pub fn make_table<T: Serialize>(data: &[T]) -> Result<Table> {
     Ok(table)
 }
 
+pub fn format_luck(prefix: &str, luck: f64) -> String {
+    let luck_str = if luck < 0.0 {
+        format!("{luck:.0}")
+    } else {
+        format!("+{luck:.0}")
+    };
+    if luck < -1600.0 {
+        format!("{prefix} {}", luck_str.red())
+    } else if luck < -400.0 {
+        format!("{prefix} {}", luck_str.yellow())
+    } else if luck < 400.0 {
+        format!("{prefix} {luck_str}")
+    } else if luck < 1600.0 {
+        format!("{prefix} {}", luck_str.green())
+    } else {
+        format!("{prefix} {}", luck_str.bright_green())
+    }
+}
+
 #[macro_export]
 macro_rules! global {
     ($name:ident) => {

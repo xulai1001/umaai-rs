@@ -18,7 +18,7 @@ use umasim::{
     neural::{Evaluator, NeuralNetEvaluator},
     search::SearchConfig,
     trainer::{MctsTrainer, NeuralNetTrainer},
-    utils::{check_windows_terminal, init_logger, pause}
+    utils::{check_windows_terminal, check_working_dir, init_logger, pause}
 };
 
 use crate::protocol::{
@@ -55,13 +55,16 @@ async fn main_guard() -> Result<()> {
     println!("{}", to_art("UMAAI 0.1".to_string(), "small", 0, 1, 0).expect("here"));
     // 0. 运行前检查
     check_windows_terminal()?;
+    if !fs_err::exists("game_config.toml")? {
+        check_working_dir()?;
+    }
     // 1. 先读取配置文件
     let config_file = fs_err::read_to_string("game_config.toml")?;
     let game_config: GameConfig = toml::from_str(&config_file)?;
     let mcts_config = SearchConfig::new_game_config(&game_config);
-
     // 2. 根据配置初始化日志
     init_logger("umaai", &game_config.log_level)?;
+    //info!("search_config = {mcts_config:?}");
 
     // 3. 再初始化全局数据
     init_global()?;
@@ -83,6 +86,7 @@ async fn main_guard() -> Result<()> {
         let contents = watcher.watch("thisTurn.json")?;
         match parse_game::<GameStatusOnsen>(&contents) {
             Ok(mut game) => {
+                //println!("{game:#?}");
                 println!("{}", game.explain_distribution()?);
                 println!("正在计算...");
                 if game.pending_selection {

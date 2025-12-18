@@ -55,11 +55,11 @@ impl Display for OnsenAction {
             }
             OnsenAction::Dig(x) => {
                 let name = &global!(ONSENDATA).onsen_info[*x as usize].name;
-                write!(f, "挖掘 {}", name.cyan())
+                write!(f, "挖掘 {}", name.bright_yellow())
             }
             OnsenAction::Upgrade(x) => {
                 let name = &global!(ONSENDATA).dig_tool_name[*x as usize];
-                write!(f, "升级 {}", name.cyan())
+                write!(f, "升级 {}", name.bright_yellow())
             }
         }
     }

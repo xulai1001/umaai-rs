@@ -198,7 +198,7 @@ pub struct SearchOutput {
     pub actions: Vec<OnsenAction>,
 
     /// 各动作的搜索结果
-    pub action_results: Vec<ActionResult>,
+    pub action_results: Vec<(ActionResult, ActionResult)>,
 
     /// 最优动作索引
     pub best_action_idx: usize,
@@ -209,14 +209,14 @@ pub struct SearchOutput {
 
 impl SearchOutput {
     /// 创建搜索输出
-    pub fn new(actions: Vec<OnsenAction>, action_results: Vec<ActionResult>, radical_factor: f64) -> Self {
+    pub fn new(actions: Vec<OnsenAction>, action_results: Vec<(ActionResult, ActionResult)>, radical_factor: f64) -> Self {
         // 找到加权平均分最高的动作
         let best_action_idx = action_results
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
-                let wa = a.weighted_mean(radical_factor);
-                let wb = b.weighted_mean(radical_factor);
+                let wa = a.0.weighted_mean(radical_factor);
+                let wb = b.0.weighted_mean(radical_factor);
                 wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)
@@ -235,9 +235,23 @@ impl SearchOutput {
         &self.actions[self.best_action_idx]
     }
 
+    pub fn best_action_2(&self) -> &OnsenAction {
+        let best_action_idx = self.action_results
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                let wa = a.1.weighted_mean(self.radical_factor);
+                let wb = b.1.weighted_mean(self.radical_factor);
+                wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+        &self.actions[best_action_idx]
+    }
+
     /// 获取最优动作的搜索结果
     pub fn best_result(&self) -> &ActionResult {
-        &self.action_results[self.best_action_idx]
+        &self.action_results[self.best_action_idx].0
     }
 
     /// 导出训练样本
@@ -274,7 +288,7 @@ impl SearchOutput {
         let values: Vec<f64> = self
             .action_results
             .iter()
-            .map(|r| r.weighted_mean(self.radical_factor))
+            .map(|r| r.0.weighted_mean(self.radical_factor))
             .collect();
 
         // 找到最大值（用于数值稳定性）
@@ -298,7 +312,7 @@ impl SearchOutput {
 
         policy
     }
-
+/* 
     /// 打印搜索结果摘要
     pub fn print_summary(&self) {
         println!("=== 搜索结果 (radical_factor={:.1}) ===", self.radical_factor);
@@ -315,4 +329,5 @@ impl SearchOutput {
             );
         }
     }
+    */
 }

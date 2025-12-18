@@ -9,6 +9,8 @@ use anyhow::{Result, anyhow};
 use colored::Colorize;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
+use umasim::utils::pause;
+use log::{info, warn};
 
 use crate::protocol::GameStatus;
 
@@ -33,6 +35,13 @@ impl UraFileWatcher {
 
     pub fn init() -> Result<Self> {
         let ura_dir = Self::ura_dir()?;
+        // 确保这个目录存在
+        if !fs_err::exists(&ura_dir)? {
+            warn!("小黑板输出目录不存在，请检查小黑板是否已经启动育成");
+            fs_err::create_dir_all(&ura_dir)?;
+            pause()?;
+        }
+        info!("{}", "开始接收游戏数据，请开始育成".green());
         let (tx, rx) = mpsc::channel();
         let mut watcher = notify::recommended_watcher(tx)?;
         watcher.watch(&Path::new(&ura_dir), RecursiveMode::NonRecursive)?;
