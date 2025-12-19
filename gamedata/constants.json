@@ -135,6 +135,6 @@
 15231
     ],
     "pt_favor_rate": 5.0,
-    "five_status_favor_rate": [1.0, 0.9, 0.7, 0.7, 0.7],
-    "mcts_turn_bonus": 60
+    "five_status_favor_rate": [1.0, 0.9, 0.7, 0.7, 1.0],
+    "mcts_turn_bonus": 70
 }

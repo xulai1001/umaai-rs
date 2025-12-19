@@ -125,6 +125,7 @@ impl MctsTrainer {
         let luck_overall = turn_score - initial_score as f64;
         let luck_turn = turn_score - last_score as f64;
         let weighted_bonus = mean_weighted - turn_score;
+        let mut race_loss = 0.0;
 
         // 找到最优动作在原列表中的索引
         let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
@@ -154,8 +155,14 @@ impl MctsTrainer {
                     result.0.mean() + mcts_bonus as f64 - turn_score,
                     best_score - turn_score
                 ));
+                if action == &OnsenAction::Race {
+                    race_loss = best_score - (result.0.mean() + mcts_bonus as f64);
+                }
             }
             info!("[回合 {} 重视评分] {}", game.turn + 1, line.join(" "));
+            if race_loss > 0.0 {
+                info!("[回合 {} 重视评分] 自选比赛损失 {}", game.turn + 1, format!("{race_loss:.0}").red());
+            }
         }
 
         // 保存分数
@@ -184,6 +191,7 @@ impl MctsTrainer {
         //let luck_overall = turn_score - initial_score as f64;
         //let luck_turn = turn_score - last_score as f64;
         //let weighted_bonus = mean_weighted - turn_score;
+        let mut race_loss = 0.0;
 
         // 找到最优动作在原列表中的索引
         let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
@@ -212,8 +220,14 @@ impl MctsTrainer {
                     result.1.mean() - turn_score,
                     best_score - turn_score
                 ));
+                if action == &OnsenAction::Race {
+                    race_loss = best_score - result.1.mean();
+                }
             }
             info!("[回合 {} 重视 PT ] {}", game.turn + 1, line.join(" "));
+            if race_loss > 0.0 {
+                info!("[回合 {} 重视 PT ] 自选比赛损失 {}", game.turn + 1, format!("{race_loss:.0}").red());
+            }
         }
 
         // 保存分数

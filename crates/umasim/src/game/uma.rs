@@ -181,9 +181,9 @@ impl Uma {
         for i in 0..5 {
             let mut status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
             // 压缩超过1200的部分
-            if status >= 1200 {
+            /*if status >= 1200 {
                 status = (1200.0 + (status - 1200) as f32 * cons.five_status_favor_rate[i]) as usize;
-            }
+            }*/
             score += cons.five_status_final_score[status];
         }
         score

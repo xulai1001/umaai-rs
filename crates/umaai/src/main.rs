@@ -103,7 +103,7 @@ async fn main_guard() -> Result<()> {
                     // 是温泉选择状态
                     let actions = game.list_actions_onsen_select();
                     let onsen = trainer.select_action(&game, &actions, &mut rng)?;
-                    println!("{}", format!("蒙特卡洛：{}", actions[onsen]).magenta());
+                    println!("{}", format!("蒙特卡洛(PT)：{}", actions[onsen]).magenta());
                     // 前进一步选择升级
                     game.apply_action(&actions[onsen], &mut rng)?;
                     let upgradeable = game.get_upgradeable_equipment();
@@ -113,7 +113,7 @@ async fn main_guard() -> Result<()> {
                             .map(|x| OnsenAction::Upgrade(*x as i32))
                             .collect::<Vec<_>>();
                         let upgrade = trainer.select_action(&game, &actions, &mut rng)?;
-                        println!("{}", format!("蒙特卡洛：{}", actions[upgrade]).magenta());
+                        println!("{}", format!("蒙特卡洛(PT)：{}", actions[upgrade]).magenta());
                     }
                 } else {
                     // 如果被解析成 Bathing 但没有温泉券合buff，就直接跳过到 Train
@@ -131,7 +131,7 @@ async fn main_guard() -> Result<()> {
 
                     let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
                     let action = actions[action_idx].clone();
-                    println!("{}", format!("蒙特卡洛: {action}").bright_green());
+                    println!("{}", format!("蒙特卡洛(PT): {action}").bright_green());
 
                     // 当 mcts 建议 UseTicket(false) 时，直接跳过 Bathing 阶段，继续给出训练推荐。
                     if action == OnsenAction::UseTicket(false) && game.stage == OnsenTurnStage::Bathing {
@@ -140,7 +140,7 @@ async fn main_guard() -> Result<()> {
                         if !actions.is_empty() {
                             let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
                             let action = actions[action_idx].clone();
-                            println!("{}", format!("蒙特卡洛: {action}").bright_green());
+                            println!("{}", format!("蒙特卡洛(PT): {action}").bright_green());
                         }
                     }
                 }
