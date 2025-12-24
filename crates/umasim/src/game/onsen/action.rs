@@ -128,6 +128,9 @@ impl ActionEnum for OnsenAction {
                 if let Some(dig_value) = game.calc_dig_value(self) {
                     game.do_dig(&dig_value, rng);
                 }
+                // 标记比赛状态
+                let t = game.turn;
+                game.uma.set_race(t);
                 // 注：比赛的体力效果通过事件处理，超回复已经在事件里判定
                 Ok(())
             }

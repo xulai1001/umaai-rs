@@ -29,14 +29,27 @@ pub struct FreeRaceData {
     /// 比赛次数
     pub count: u32,
     /// 比赛等级, 可选
-    pub grade: Option<u32>
+    pub grade: Option<u32>,
+    /// 比赛掩码，json里不存在，载入时计算
+    #[serde(default)]
+    pub mask: u64
 }
 
 impl FreeRaceData {
-    /// 返回(start_turn-11..end_turn-11) bit为1 其余为0
-    pub fn turn_mask(&self) -> u64 {
-        let len = self.end_turn - self.start_turn + 1;
-        ((1 << len) - 1) << (self.start_turn - 11)
+    /// 能打的比赛设为1，其他为0
+    pub fn update_turn_mask(&mut self) {
+        let mut ret = 0;
+        let race_grades = &global!(GAMECONSTANTS).race_grades;
+        for i in self.start_turn..=self.end_turn {
+            if let Some(g) = &self.grade {
+                if race_grades[i as usize] <= *g as i32 {
+                    ret |= 1 << (i-11);
+                }
+            } else {
+                ret |= 1 << (i-11);
+            }
+        }
+        self.mask = ret;
     }
 }
 
@@ -328,11 +341,17 @@ pub fn load_json<T: DeserializeOwned>(path: &str) -> Result<T> {
 
 impl GameData {
     pub fn load() -> Result<Self> {
-        let uma: BTreeMap<_, _> = load_json("gamedata/umaDB.json")?;
+        let mut uma: BTreeMap<String, UmaData> = load_json("gamedata/umaDB.json")?;
         let card: BTreeMap<_, _> = load_json("gamedata/cardDB.json")?;
         let text = load_json("gamedata/text_data_dict.json")?;
         let events = load_json("gamedata/events.json")?;
         info!("载入 {} 马娘, {} 支援卡", uma.len(), card.len());
+        // 处理free race mask
+        for uma in uma.values_mut() {
+            for f in uma.free_races.iter_mut() {
+                f.update_turn_mask();
+            }
+        }
         Ok(Self { uma, card, text, events })
     }
 
@@ -540,7 +559,9 @@ pub struct GameConfig {
     pub mcts: MctsConfig,
     /// 允许MCTS自由选择温泉
     #[serde(default)]
-    pub mcts_selected_onsen: bool
+    pub mcts_selected_onsen: bool,
+    /// 蒙特卡洛输出评分还是PT重视结果
+    pub mcts_selection: String
 }
 
 fn default_scenario() -> String {
@@ -597,14 +618,17 @@ mod tests {
 
     #[test]
     fn test_turn_mask() -> Result<()> {
+        GAMECONSTANTS.set(GameConstants::load()?).expect("global constants");
         init_logger("test", "info")?;
-        let free_race = FreeRaceData {
+        let mut free_race = FreeRaceData {
             start_turn: 24,
             end_turn: 47,
             count: 1,
-            grade: Some(1)
+            grade: Some(1),
+            mask: 0
         };
-        println!("{:b}", free_race.turn_mask()); // 1111111111111111111111110000000000000
+        free_race.update_turn_mask();   // 只有G1会被标1
+        println!("{:b}", free_race.mask); // 10111010000111110100000000000000000000
         Ok(())
     }
 }
@@ -614,8 +638,8 @@ pub static GAMECONSTANTS: OnceLock<GameConstants> = OnceLock::new();
 pub static LOGGER: OnceLock<Mutex<LoggerHandle>> = OnceLock::new();
 
 pub fn init_global() -> Result<()> {
-    GAMEDATA.set(GameData::load()?).expect("global gamedata");
     GAMECONSTANTS.set(GameConstants::load()?).expect("global constants");
+    GAMEDATA.set(GameData::load()?).expect("global gamedata");
     onsen::init_onsen_data()?;
     Ok(())
 }

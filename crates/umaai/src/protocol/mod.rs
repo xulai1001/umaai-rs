@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use log::warn;
+use log::{info, warn};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use umasim::{
     game::{BaseGame, FriendOutState, FriendState, InheritInfo, SupportCard, TurnStage, Uma, UmaFlags},
@@ -112,7 +112,9 @@ pub struct GameStatusBase {
     pub friend_outgoing_used: i32,
     /// 回合状态
     #[serde(rename = "playing_state")]
-    pub playing_state: i32
+    pub playing_state: i32,
+    /// 胜场信息
+    pub race_history: Vec<i32>
 }
 
 impl GameStatusBase {
@@ -129,8 +131,8 @@ impl GameStatusBase {
             refresh_mind: self.is_refresh_mind as i32,
             ..Default::default()
         };
-        // TODO 幸运体质, total_hints
-        Ok(Uma {
+
+        let mut ret = Uma {
             uma_id: self.uma_id,
             vital: self.vital,
             max_vital: self.max_vital,
@@ -143,8 +145,17 @@ impl GameStatusBase {
             total_hints: self.total_hints,
             race_bonus: 0,
             flags,
-            career_races: data.zip_races()
-        })
+            career_races: data.zip_races(),
+            win_races: 0
+        };
+        // 设置比赛状态
+        for t in &self.race_history {
+            ret.set_race(*t);
+        }
+        //if ret.win_races != 0 {
+        //    info!("win_races: {:b}", ret.win_races);
+       // }
+        Ok(ret)
     }
 
     pub fn parse_friend(&self, scenario_friend_chara_id: u32) -> Result<FriendState> {
@@ -167,7 +178,7 @@ impl GameStatusBase {
             }
         }
         // 如果没找到友人
-        warn!("没带剧本友人?");
+        warn!("没带剧本友人? AI可能无法正常工作。请检查卡组");
         Ok(FriendState::default())
     }
 
@@ -184,6 +195,10 @@ impl GameStatusBase {
     pub fn parse_basegame(&self, scenario_friend_chara_id: u32) -> Result<BaseGame> {
         let inherit = self.parse_inherit()?;
         let mut uma = self.parse_uma()?;
+        // 检查是否有赛程信息
+        if self.turn > 12 && self.race_history.is_empty() {
+            warn!("未接收到胜场信息，自选比赛计算可能出错；需要更新小黑板插件");
+        }
         let friend = self.parse_friend(scenario_friend_chara_id)?;
         let mut deck = vec![];
         let mut card_type_count = [0; 7];

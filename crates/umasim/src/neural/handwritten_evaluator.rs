@@ -10,6 +10,8 @@
 //! 3. 羁绊价值提升 - 前期更重视羁绊
 
 use anyhow::Result;
+use log::info;
+use colored::Colorize;
 use rand::{rngs::StdRng, seq::IndexedRandom};
 
 use super::{Evaluator, ValueOutput};
@@ -19,7 +21,7 @@ use crate::{
         PersonType,
         onsen::{action::OnsenAction, game::OnsenGame}
     },
-    gamedata::{GameConfig, onsen::ONSENDATA}
+    gamedata::{GAMECONSTANTS, GameConfig, onsen::ONSENDATA}, global
 };
 
 // ============================================================================
@@ -88,8 +90,8 @@ const RACE_BASE_BONUS: f64 = 450.0;
 /// 非目标比赛基础价值
 const NON_TARGET_RACE_BONUS: f64 = 180.0;
 
-/// 温泉券覆盖生涯比赛的加成
-const RACE_TICKET_BONUS: f64 = 250.0;
+/// 自选比赛最大额外价值 (/剩余回合数)
+const FREE_RACE_BONUS: f64 = 2000.0;
 
 /// 狄杜斯角色ID（生涯比赛额外加成）
 const DIDUS_CHARA_ID: u32 = 1063;
@@ -620,8 +622,7 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
         let vital_before = vital_evaluation(game.uma.vital, game.uma.max_vital);
         let mut best_action: Option<OnsenAction> = None;
         let mut best_value = f64::NEG_INFINITY;
-        //Flet mut debug_line = String::new();
-
+        //let mut debug_line = String::new();
         for action in &actions {
             let value = match action {
                 OnsenAction::Train(t) => self.evaluate_training(game, *t as usize),
@@ -698,11 +699,33 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
 
                         // 狄杜斯角色额外加成
                         if game.uma.chara_id() == DIDUS_CHARA_ID {
-                            race_value *= 1.5;
+                            race_value *= 1.8;
                         }
                         race_value
                     } else {
-                        NON_TARGET_RACE_BONUS // 非目标比赛
+                        // 如果在自选比赛区间，且有足够等级的比赛，则考虑自选比赛
+                        if let Some(free) = game.uma.find_free_race(game.turn) {
+                            let race_grade = global!(GAMECONSTANTS).race_grades[game.turn as usize];
+                            let count = game.uma.count_free_race(free);
+                            let remain_turn = free.end_turn as i32 - game.turn + 1;
+                            if count < free.count {
+                                match &free.grade {
+                                    Some(g) => {
+                                        if race_grade <= *g as i32 {
+                                            // 相当于生涯比赛收益 * 缺的比赛数量
+                                            RACE_BASE_BONUS * (free.count - count) as f64 + FREE_RACE_BONUS / remain_turn as f64
+                                        } else {
+                                            NON_TARGET_RACE_BONUS
+                                        }
+                                    }
+                                    None => RACE_BASE_BONUS * (free.count - count) as f64 + FREE_RACE_BONUS / remain_turn as f64
+                                }
+                            } else {
+                                NON_TARGET_RACE_BONUS
+                            }
+                        } else {
+                            NON_TARGET_RACE_BONUS // 非目标比赛
+                        }                        
                     };
                     // 比赛也有挖掘收益
                     value += self.evaluate_dig_value(game, action);

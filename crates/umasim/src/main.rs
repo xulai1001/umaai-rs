@@ -331,7 +331,8 @@ async fn main() -> Result<()> {
                         .with_search_cpuct(game_config.mcts.search_cpuct)
                         .with_expected_search_stdev(game_config.mcts.expected_search_stdev);
                     // info!("search_config = {search_config:?}");
-                    let trainer = MctsTrainer::new(search_config).verbose(true);
+                    let mut trainer = MctsTrainer::new(search_config).verbose(true);
+                    trainer.mcts_selection = game_config.mcts_selection.clone();
                     match game_config.scenario.as_str() {
                         "onsen" => {
                             run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)

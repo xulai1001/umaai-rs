@@ -53,7 +53,7 @@ where
 
 /// 实际的主函数
 async fn main_guard() -> Result<()> {
-    println!("{}", to_art("UMAAI 0.1".to_string(), "small", 0, 1, 0).expect("here"));
+    println!("{}", to_art("UMAAI 0.2".to_string(), "small", 0, 1, 0).expect("here"));
     // 0. 运行前检查
     check_windows_terminal()?;
     if !fs_err::exists("game_config.toml")? {
@@ -80,6 +80,7 @@ async fn main_guard() -> Result<()> {
     // MCTS训练员
     let mut trainer = MctsTrainer::new(mcts_config).verbose(true);
     trainer.mcts_onsen = game_config.mcts_selected_onsen;
+    trainer.mcts_selection = game_config.mcts_selection.clone();
 
     // 开始检测文件
     let mut watcher = UraFileWatcher::init()?;
@@ -108,7 +109,7 @@ async fn main_guard() -> Result<()> {
                     // 是温泉选择状态
                     let actions = game.list_actions_onsen_select();
                     let onsen = trainer.select_action(&game, &actions, &mut rng)?;
-                    println!("{}", format!("蒙特卡洛(PT)：{}", actions[onsen]).magenta());
+                    println!("{}", format!("蒙特卡洛：{}", actions[onsen]).magenta());
                     // 前进一步选择升级
                     game.apply_action(&actions[onsen], &mut rng)?;
                     let upgradeable = game.get_upgradeable_equipment();
@@ -118,7 +119,7 @@ async fn main_guard() -> Result<()> {
                             .map(|x| OnsenAction::Upgrade(*x as i32))
                             .collect::<Vec<_>>();
                         let upgrade = trainer.select_action(&game, &actions, &mut rng)?;
-                        println!("{}", format!("蒙特卡洛(PT)：{}", actions[upgrade]).magenta());
+                        println!("{}", format!("蒙特卡洛：{}", actions[upgrade]).magenta());
                     }
                 } else {
                     // 如果被解析成 Bathing 但没有温泉券合buff，就直接跳过到 Train
@@ -136,7 +137,7 @@ async fn main_guard() -> Result<()> {
 
                     let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
                     let action = actions[action_idx].clone();
-                    println!("{}", format!("蒙特卡洛(PT): {action}").bright_green());
+                    println!("{}", format!("蒙特卡洛: {action}").bright_green());
 
                     // 当 mcts 建议 UseTicket(false) 时，直接跳过 Bathing 阶段，继续给出训练推荐。
                     if action == OnsenAction::UseTicket(false) && game.stage == OnsenTurnStage::Bathing {
@@ -145,7 +146,7 @@ async fn main_guard() -> Result<()> {
                         if !actions.is_empty() {
                             let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
                             let action = actions[action_idx].clone();
-                            println!("{}", format!("蒙特卡洛(PT): {action}").bright_green());
+                            println!("{}", format!("蒙特卡洛: {action}").bright_green());
                         }
                     }
                 }

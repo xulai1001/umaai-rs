@@ -6,11 +6,11 @@ use std::{default::Default, sync::Arc};
 pub use action::*;
 use anyhow::Result;
 use hashbrown::HashMap;
-use log::info;
+use log::{info, warn};
 pub use person::*;
 use rand::{rngs::StdRng, seq::IndexedRandom};
 
-use crate::{explain::Explain, game::*, gamedata::EventData, utils::*};
+use crate::{explain::Explain, game::*, gamedata::{EventData, FreeRaceData}, utils::*};
 
 /// 一局游戏的基本状态，剧本通用，用于计算，不用于通信(例如通信只传递卡组id)  
 /// 不包含人头信息(Person类型可能不同)，实际的剧本对象需要补上Vec<Person>才能实现Game Trait    
@@ -160,6 +160,31 @@ impl BaseGame {
             Some(event)
         } else {
             None
+        }
+    }
+    
+    /// 检测自选比赛是否达标
+    pub fn check_free_race(&self) -> bool {
+        if let Ok(data) = self.uma.get_data() {
+            for free_race in &data.free_races {
+                // 只在结束回合+1时检测
+                if self.turn as u32 == free_race.end_turn + 1 {
+                    let count = self.uma.count_free_race(free_race);
+                    info!("回合 {} -> {} 已比赛 {} / {} 场",
+                        free_race.start_turn,
+                        free_race.end_turn,
+                        count,
+                        free_race.count
+                    );
+                    if count < free_race.count {
+                        warn!("自选比赛未达标，寄了");
+                        return false;
+                    }
+                }
+            }
+            true
+        } else {
+            true
         }
     }
 }

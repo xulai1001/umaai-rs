@@ -51,6 +51,7 @@ impl BaseAction {
             // 事件面板乘算比赛加成
             event.choices[0].map_status(|x| (x as f32 * race_bonus).round() as i32);
             game.unresolved_events.push(event);
+            game.uma.set_race(game.turn);
         } else {
             let grade = global!(GAMECONSTANTS).race_grades[game.turn as usize];
             info!(">> 自选比赛 G{grade} - 比赛加成: {}", game.uma.race_bonus);
@@ -59,6 +60,7 @@ impl BaseAction {
             // 事件面板乘算比赛加成
             event.choices[0].map_status(|x| (x as f32 * race_bonus).round() as i32);
             game.unresolved_events.push(event);
+            game.uma.set_race(game.turn);
         }
         Ok(())
     }

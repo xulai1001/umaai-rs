@@ -41,6 +41,8 @@ pub struct MctsTrainer {
     pub verbose: bool,
     /// 是否搜索温泉
     pub mcts_onsen: bool,
+    /// 优先输出哪种结果
+    pub mcts_selection: String,
     /// 保存上一回合游戏，用于判断
     pub last_game: Option<OnsenGame>,
     /// 上一回合最好的选择分数. 使用Atomic以实现内部可变
@@ -57,6 +59,7 @@ impl MctsTrainer {
             evaluator: HandwrittenEvaluator::new(),
             verbose: false,
             mcts_onsen: false,
+            mcts_selection: "pt".to_string(),
             last_game: None,
             last_score: (AtomicU64::new(0), AtomicU64::new(0)),
             initial_score: (AtomicU64::new(0), AtomicU64::new(0))
@@ -130,7 +133,7 @@ impl MctsTrainer {
         let luck_overall = turn_score - initial_score as f64;
         let luck_turn = turn_score - last_score as f64;
         let weighted_bonus = mean_weighted - turn_score;
-        let mut race_loss = 0.0;
+        //let mut race_loss = 0.0;
 
         // 找到最优动作在原列表中的索引
         let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
@@ -162,18 +165,11 @@ impl MctsTrainer {
                     result.0.mean() + mcts_bonus as f64 - turn_score,
                     best_score - turn_score
                 ));
-                if action == &OnsenAction::Race {
-                    race_loss = best_score - (result.0.mean() + mcts_bonus as f64);
-                }
+                //if action == &OnsenAction::Race {
+                 //   race_loss = best_score - (result.0.mean() + mcts_bonus as f64);
+                //}
             }
             info!("[回合 {} 重视评分] {}", game.turn + 1, line.join(" "));
-            if race_loss > 0.0 {
-                info!(
-                    "[回合 {} 重视评分] 自选比赛损失 {}",
-                    game.turn + 1,
-                    format!("{race_loss:.0}").red()
-                );
-            }
         }
 
         // 保存分数
@@ -202,7 +198,7 @@ impl MctsTrainer {
         //let luck_overall = turn_score - initial_score as f64;
         //let luck_turn = turn_score - last_score as f64;
         //let weighted_bonus = mean_weighted - turn_score;
-        let mut race_loss = 0.0;
+        //let mut race_loss = 0.0;
 
         // 找到最优动作在原列表中的索引
         let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
@@ -231,18 +227,11 @@ impl MctsTrainer {
                     result.1.mean() - turn_score,
                     best_score - turn_score
                 ));
-                if action == &OnsenAction::Race {
-                    race_loss = best_score - result.1.mean();
-                }
+                //if action == &OnsenAction::Race {
+                //    race_loss = best_score - result.1.mean();
+                //}
             }
             info!("[回合 {} 重视 PT ] {}", game.turn + 1, line.join(" "));
-            if race_loss > 0.0 {
-                info!(
-                    "[回合 {} 重视 PT ] 自选比赛损失 {}",
-                    game.turn + 1,
-                    format!("{race_loss:.0}").red()
-                );
-            }
         }
 
         // 保存分数
@@ -304,12 +293,18 @@ impl Trainer<OnsenGame> for MctsTrainer {
 
         // 使用 MCTS 搜索
         let search_output = self.search.search(game, actions, rng)?;
+        global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
+        
         let best_action = search_output.best_action();
         let best_action_2 = search_output.best_action_2();
-        global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
+        let selection = match self.mcts_selection.as_str() {
+            "pt" => best_action_2,
+            _ => best_action
+        };
+
         // 找到最优动作在原列表中的索引
         //let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
-        let idx = actions.iter().position(|a| a == best_action_2).unwrap_or(0);
+        let idx = actions.iter().position(|a| a == selection).unwrap_or(0);
         self.update_score(game, actions, &search_output);
         self.update_score_2(game, actions, &search_output);
 

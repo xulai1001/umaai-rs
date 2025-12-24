@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     explain::Explain,
-    gamedata::{ActionValue, GAMECONSTANTS, GAMEDATA, UmaData},
+    gamedata::{ActionValue, FreeRaceData, GAMECONSTANTS, GAMEDATA, UmaData},
     global,
     utils::*
 };
@@ -210,6 +210,21 @@ impl Uma {
         self.vital = (self.vital + action.vital).min(self.max_vital).max(0);
         self.total_hints += action.hint_level;
         self
+    }
+
+    /// 返回自选比赛场数
+    pub fn count_free_race(&self, free: &FreeRaceData) -> u32 {
+        (self.win_races & free.mask).count_ones()
+    }
+
+    /// 返回当前所处的自选比赛区间
+    pub fn find_free_race(&self, turn: i32) -> Option<&FreeRaceData> {
+        if let Ok(data) = self.get_data() {
+            data.free_races.iter()
+                .find(|f| f.start_turn <= turn as u32 && f.end_turn >= turn as u32)
+        } else {
+            None
+        }
     }
 }
 

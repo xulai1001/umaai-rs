@@ -244,6 +244,8 @@ impl Game for BasicGame {
             // 下一个回合
             self.turn += 1;
             self.stage = TurnStage::Begin;
+            // 检查自选比赛
+            return self.check_free_race();
         } else {
             return false;
         }

@@ -1251,14 +1251,16 @@ impl Game for OnsenGame {
         if let Some(stage) = self.stage.next() {
             // 回合内，下一个阶段(不包含OnsenSelect)
             self.stage = stage;
+            true
         } else if self.turn < self.max_turn() {
             // 下一个回合
             self.turn += 1;
             self.stage = OnsenTurnStage::Begin;
+            // 检查自选比赛
+            self.check_free_race()
         } else {
-            return false;
+            false
         }
-        true
     }
 
     fn list_actions(&self) -> Result<Vec<Self::Action>> {
