@@ -36,8 +36,5 @@ pub use neural_net_evaluator::{
     NeuralNetEvaluator,
     ThreadLocalNeuralNetLeafEvaluator,
     ThreadLocalNeuralNetLeafStatsSnapshot,
-    ThreadLocalNeuralNetRolloutPolicy,
-    ThreadLocalNeuralNetRolloutPolicyMode,
-    ThreadLocalNeuralNetRolloutStatsSnapshot,
 };
 pub use value_output::ValueOutput;

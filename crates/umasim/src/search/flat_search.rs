@@ -24,9 +24,6 @@ use crate::{
         HandwrittenEvaluator,
         ThreadLocalNeuralNetLeafEvaluator,
         ThreadLocalNeuralNetLeafStatsSnapshot,
-        ThreadLocalNeuralNetRolloutPolicy,
-        ThreadLocalNeuralNetRolloutPolicyMode,
-        ThreadLocalNeuralNetRolloutStatsSnapshot,
         ValueOutput,
     }
 };
@@ -53,21 +50,6 @@ impl LeafEvaluator {
     }
 }
 
-#[derive(Clone)]
-enum RolloutPolicy {
-    Handwritten,
-    NeuralNet(ThreadLocalNeuralNetRolloutPolicy),
-}
-
-impl RolloutPolicy {
-    fn name(&self) -> &'static str {
-        match self {
-            RolloutPolicy::Handwritten => "handwritten",
-            RolloutPolicy::NeuralNet(_) => "nn",
-        }
-    }
-}
-
 /// 扁平蒙特卡洛搜索
 ///
 /// 使用手写逻辑进行模拟，统计各动作的分数分布。
@@ -75,9 +57,6 @@ impl RolloutPolicy {
 pub struct FlatSearch {
     /// 手写评估器（用于模拟）
     rollout_evaluator: HandwrittenEvaluator,
-
-    /// rollout 动作策略（E6：可切 nn，事件 choice 保持手写）
-    rollout_policy: RolloutPolicy,
 
     /// leaf eval 评估器（用于 max_depth>0 截断估值）
     leaf_evaluator: LeafEvaluator,
@@ -94,7 +73,6 @@ impl FlatSearch {
     pub fn new(config: SearchConfig) -> Self {
         Self {
             rollout_evaluator: HandwrittenEvaluator::new(),
-            rollout_policy: RolloutPolicy::Handwritten,
             leaf_evaluator: LeafEvaluator::Handwritten,
             config,
             rollout_batch_size: 1,
@@ -118,30 +96,6 @@ impl FlatSearch {
         self
     }
 
-    /// E6：rollout 动作选择走 NN（greedy），事件 choice 仍走手写（降低推理开销）
-    pub fn with_rollout_policy_nn_greedy(mut self, model_path: impl Into<String>) -> Self {
-        self.rollout_policy = RolloutPolicy::NeuralNet(ThreadLocalNeuralNetRolloutPolicy::new(
-            model_path,
-            ThreadLocalNeuralNetRolloutPolicyMode::Greedy,
-        ));
-        self
-    }
-
-    /// E6：rollout 动作选择走 NN（sample），事件 choice 仍走手写（更探索但波动更大）
-    pub fn with_rollout_policy_nn_sample(mut self, model_path: impl Into<String>) -> Self {
-        self.rollout_policy = RolloutPolicy::NeuralNet(ThreadLocalNeuralNetRolloutPolicy::new(
-            model_path,
-            ThreadLocalNeuralNetRolloutPolicyMode::Sample,
-        ));
-        self
-    }
-
-    /// E6：rollout 动作选择回退为 handwritten（默认）
-    pub fn with_rollout_policy_handwritten(mut self) -> Self {
-        self.rollout_policy = RolloutPolicy::Handwritten;
-        self
-    }
-
     /// 设置 leaf eval 微批大小（仅 nn leaf 生效）
     pub fn with_rollout_batch_size(mut self, batch_size: usize) -> Self {
         self.rollout_batch_size = batch_size.max(1).min(1024);
@@ -157,14 +111,6 @@ impl FlatSearch {
     pub fn leaf_nn_stats(&self) -> Option<ThreadLocalNeuralNetLeafStatsSnapshot> {
         match &self.leaf_evaluator {
             LeafEvaluator::NeuralNet(nn) => Some(nn.stats()),
-            _ => None,
-        }
-    }
-
-    /// E6 调试：获取 rollout policy 的 NN 推理统计（仅当 rollout_policy 为 nn 时存在）
-    pub fn rollout_nn_stats(&self) -> Option<ThreadLocalNeuralNetRolloutStatsSnapshot> {
-        match &self.rollout_policy {
-            RolloutPolicy::NeuralNet(nn) => Some(nn.stats()),
             _ => None,
         }
     }
@@ -202,12 +148,11 @@ impl FlatSearch {
         let radical_factor = self.compute_radical_factor(game.turn as usize);
 
         debug!(
-            "[回合 {}] 开始搜索: {} 个动作, search_n={}, max_depth={}, rollout_policy={}, leaf_eval={}, radical_factor={:.1}, ucb={}",
+            "[回合 {}] 开始搜索: {} 个动作, search_n={}, max_depth={}, leaf_eval={}, radical_factor={:.1}, ucb={}",
             game.turn,
             actions.len(),
             self.config.search_n,
             self.config.max_depth,
-            self.rollout_policy.name(),
             self.leaf_evaluator.name(),
             radical_factor,
             self.config.use_ucb
@@ -474,13 +419,6 @@ impl FlatSearch {
             // 克隆游戏状态
             let mut sim_game = game.clone();
             let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
-            let trainer_nn = NnRolloutTrainer {
-                nn: match &self.rollout_policy {
-                    RolloutPolicy::NeuralNet(nn) => Some(nn),
-                    _ => None,
-                },
-                choice_evaluator: &self.rollout_evaluator,
-            };
 
             // 执行初始动作
             sim_game.apply_action(action, rng)?;
@@ -488,15 +426,9 @@ impl FlatSearch {
             // max_depth==0：保持旧行为，rollout 跑到终局
             if self.config.max_depth == 0 {
                 while sim_game.next() {
-                    match &self.rollout_policy {
-                        RolloutPolicy::Handwritten => sim_game.run_stage(&trainer_hw, rng)?,
-                        RolloutPolicy::NeuralNet(_) => sim_game.run_stage(&trainer_nn, rng)?,
-                    }
+                    sim_game.run_stage(&trainer_hw, rng)?;
                 }
-                match &self.rollout_policy {
-                    RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-                    RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-                }
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
                     sim_game.uma().calc_score_with_pt_favor() as f64,
@@ -513,20 +445,14 @@ impl FlatSearch {
                     finished = true;
                     break;
                 }
-                match &self.rollout_policy {
-                    RolloutPolicy::Handwritten => sim_game.run_stage(&trainer_hw, rng)?,
-                    RolloutPolicy::NeuralNet(_) => sim_game.run_stage(&trainer_nn, rng)?,
-                }
+                sim_game.run_stage(&trainer_hw, rng)?;
                 if (sim_game.turn - start_turn) >= max_depth {
                     break;
                 }
             }
 
             if finished {
-                match &self.rollout_policy {
-                    RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-                    RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-                }
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
                     sim_game.uma().calc_score_with_pt_favor() as f64,
@@ -535,10 +461,7 @@ impl FlatSearch {
             // 有些情况下（例如在达到 max_depth 的同一轮刚好走到终局），可能还未通过 next() 触发 finished。
             // 用 turn>=max_turn 兜底判定终局，并确保 on_simulation_end 被触发，避免漏算最终奖励。
             if sim_game.turn >= sim_game.max_turn() {
-                match &self.rollout_policy {
-                    RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-                    RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-                }
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
                     sim_game.uma().calc_score_with_pt_favor() as f64,
@@ -636,13 +559,6 @@ impl FlatSearch {
         // 克隆游戏状态
         let mut sim_game = game.clone();
         let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
-        let trainer_nn = NnRolloutTrainer {
-            nn: match &self.rollout_policy {
-                RolloutPolicy::NeuralNet(nn) => Some(nn),
-                _ => None,
-            },
-            choice_evaluator: &self.rollout_evaluator,
-        };
 
         // 执行初始动作
         sim_game.apply_action(action, rng)?;
@@ -650,15 +566,9 @@ impl FlatSearch {
         // max_depth==0：保持旧行为，rollout 跑到终局
         if self.config.max_depth == 0 {
             while sim_game.next() {
-                match &self.rollout_policy {
-                    RolloutPolicy::Handwritten => sim_game.run_stage(&trainer_hw, rng)?,
-                    RolloutPolicy::NeuralNet(_) => sim_game.run_stage(&trainer_nn, rng)?,
-                }
+                sim_game.run_stage(&trainer_hw, rng)?;
             }
-            match &self.rollout_policy {
-                RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-                RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-            }
+            sim_game.on_simulation_end(&trainer_hw, rng)?;
             return Ok(SimOutcome::Terminal {
                 score: sim_game.uma().calc_score() as f64,
                 score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
@@ -675,20 +585,14 @@ impl FlatSearch {
                 finished = true;
                 break;
             }
-            match &self.rollout_policy {
-                RolloutPolicy::Handwritten => sim_game.run_stage(&trainer_hw, rng)?,
-                RolloutPolicy::NeuralNet(_) => sim_game.run_stage(&trainer_nn, rng)?,
-            }
+            sim_game.run_stage(&trainer_hw, rng)?;
             if (sim_game.turn - start_turn) >= max_depth {
                 break;
             }
         }
 
         if finished || sim_game.turn >= sim_game.max_turn() {
-            match &self.rollout_policy {
-                RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-                RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-            }
+            sim_game.on_simulation_end(&trainer_hw, rng)?;
             return Ok(SimOutcome::Terminal {
                 score: sim_game.uma().calc_score() as f64,
                 score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
@@ -727,23 +631,10 @@ impl FlatSearch {
         sim_game.pending_selection = false;
         // 去除pending_selection状态后就可以正常模拟了。
         let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
-        let trainer_nn = NnRolloutTrainer {
-            nn: match &self.rollout_policy {
-                RolloutPolicy::NeuralNet(nn) => Some(nn),
-                _ => None,
-            },
-            choice_evaluator: &self.rollout_evaluator,
-        };
         while sim_game.next() {
-            match &self.rollout_policy {
-                RolloutPolicy::Handwritten => sim_game.run_stage(&trainer_hw, rng)?,
-                RolloutPolicy::NeuralNet(_) => sim_game.run_stage(&trainer_nn, rng)?,
-            }
+            sim_game.run_stage(&trainer_hw, rng)?;
         }
-        match &self.rollout_policy {
-            RolloutPolicy::Handwritten => sim_game.on_simulation_end(&trainer_hw, rng)?,
-            RolloutPolicy::NeuralNet(_) => sim_game.on_simulation_end(&trainer_nn, rng)?,
-        }
+        sim_game.on_simulation_end(&trainer_hw, rng)?;
         Ok((
             sim_game.uma().calc_score() as f64,
             sim_game.uma().calc_score_with_pt_favor() as f64
@@ -811,36 +702,4 @@ impl<'a> crate::game::Trainer<OnsenGame> for SimulationTrainer<'a> {
     }
 }
 
-/// E6：rollout 动作走 NN，事件 choice 仍走手写（降低推理开销）
-struct NnRolloutTrainer<'a> {
-    nn: Option<&'a ThreadLocalNeuralNetRolloutPolicy>,
-    choice_evaluator: &'a HandwrittenEvaluator,
-}
-
-impl<'a> crate::game::Trainer<OnsenGame> for NnRolloutTrainer<'a> {
-    fn select_action(&self, game: &OnsenGame, actions: &[OnsenAction], rng: &mut StdRng) -> Result<usize> {
-        if actions.is_empty() || actions.len() == 1 {
-            return Ok(0);
-        }
-        match self.nn {
-            Some(nn) => Ok(nn.select_action_index(game, actions, rng)),
-            None => Ok(0),
-        }
-    }
-
-    fn select_choice(
-        &self, game: &OnsenGame, choices: &[crate::gamedata::ActionValue], _rng: &mut StdRng
-    ) -> Result<usize> {
-        // 事件选项：固定走手写 evaluate_choice（你要求的降推理开销版本）
-        let mut best_idx = 0;
-        let mut best_value = f64::NEG_INFINITY;
-        for (i, _choice) in choices.iter().enumerate() {
-            let value = self.choice_evaluator.evaluate_choice(game, i);
-            if value > best_value {
-                best_value = value;
-                best_idx = i;
-            }
-        }
-        Ok(best_idx)
-    }
-}
+// 说明：E6 的“rollout 动作走 NN”已回退；rollout 全程固定使用 SimulationTrainer(HandwrittenEvaluator)。

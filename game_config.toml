@@ -39,9 +39,9 @@ uma = 102303
 # 卡组(ID, 突破等级, 参考gamedata/cardDB.json)
 # 温泉剧本需要包含友人卡 (chara_id = 9050)
 # 21110 [力]美妙姿势 [速]气槽 [速]东海帝王 [耐]机伶金花  [根]黄金旅程 [友]保科健子 score_mean_threshold = 60000 choice_score_mean_threshold = 62000
-#cards = [302834, 302824, 302754, 302744, 302644, 302764]
+cards = [302834, 302824, 302754, 302744, 302644, 302764]
 # 20111 [速]气槽 [速]东海帝王 [力]美妙姿势 [根]黄金旅程 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
-cards = [302824, 302754, 302834, 302644, 302484, 302764]
+#cards = [302824, 302754, 302834, 302644, 302484, 302764]
 # 21101 [速]气槽 [速]东海帝王 [耐]机伶金花 [力]美妙姿势 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58000 choice_score_mean_threshold = 60000
 #cards = [302824, 302754, 302744, 302834, 302484, 302764]
 # 32000 [速]爱慕律动 [速]气槽 [速]东海帝王 [耐]机伶金花 [耐]超常骏骥 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
@@ -107,15 +107,15 @@ rollout_policy = "handwritten"
 # ========= 生成目标 =========
 
 # 目标写盘样本数（accepted_total：action+choice 的总和）
-target_samples = 50000
+target_samples = 40000
 
 # 最多模拟局数（防止阈值太高一直跑不满；达到 max_games 仍未凑够会提前结束）
-max_games = 100000
+max_games = 200000
 
 # ========= 样本筛选（action）=========
 
 # action 样本阈值：当回合动作搜索 best.mean >= threshold 才会把该 action 样本写入数据集
-score_mean_threshold = 56000
+score_mean_threshold = 58000
 
 # 默认会丢弃 scoreMean==0 的样本（drop_zero_mean=true），且采样回合范围为 1..=78、stride=1。
 
@@ -126,7 +126,7 @@ output_dir = "training_data"
 
 # 输出名称（自定义前缀）：最终会输出到 `output_dir/output_name/`（再按需追加时间戳）
 # - 会做路径安全过滤（自动去掉 Windows 不允许的字符）
-output_name = "p2_10k_s128_r2"
+output_name = "mf_RUN_TODO"
 
 # 是否在输出目录名后自动追加时间戳：
 # - true: 每次运行输出到 `.../output_name_YYYYMMDD_HHMMSS/`（避免你每次手改目录名）
@@ -155,7 +155,7 @@ resume = false
 # ========= 并行与日志 =========
 
 # rayon 线程数（外层顺序跑 game；FlatSearch 内部使用该线程池并行）
-threads = 4
+threads = 23
 
 # 进度输出间隔（按“已完成局数”）
 progress_interval = 5
@@ -164,7 +164,7 @@ progress_interval = 5
 
 # 每个动作搜索次数（search_n）
 # - 这是 action 样本质量/耗时的核心旋钮：越大越准也越慢
-search_n = 128
+search_n = 256
 
 # 是否启用 UCB 动态分配（true 时会分配更多搜索给好动作）
 use_ucb = true
@@ -172,7 +172,7 @@ use_ucb = true
 # UCB 每组搜索次数（重要！）
 # - 当 use_ucb=true 时，第一阶段会对每个动作先跑 search_group_size 次
 # - 代码会自动 clamp：search_group_size <= search_n
-search_group_size = 128
+search_group_size = 256
 
 # policy softmax 温度：越小分布越尖锐（更接近 one-hot），越大更平滑
 policy_delta = 100.0
@@ -196,7 +196,7 @@ choice_rollouts_per_option = 2
 
 # choice 样本阈值：best_choice.mean >= threshold 才写入 choice 样本
 # - 建议与 score_mean_threshold 保持一致起跑；如果 choice 样本太少，可适当降低
-choice_score_mean_threshold = 60000
+choice_score_mean_threshold = 60500
 
 # choice 相关默认值说明（不再常驻配置）：
 # - choice_policy_delta=50.0

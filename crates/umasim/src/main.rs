@@ -369,34 +369,6 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    // E6：rollout 动作策略开关（动作走 NN，事件 choice 仍走手写）
-                    match game_config.mcts.rollout_policy.as_str() {
-                        "handwritten" => {
-                            trainer.search = trainer.search.with_rollout_policy_handwritten();
-                        }
-                        "nn_greedy" | "nn_sample" => {
-                            let model_path = game_config.neuralnet_model_path.as_str();
-                            if !std::path::Path::new(model_path).exists() {
-                                return Err(anyhow::anyhow!(
-                                    "mcts.rollout_policy=\"{}\" 但模型文件不存在: {model_path}",
-                                    game_config.mcts.rollout_policy
-                                ));
-                            }
-                            // 先验证模型可加载（避免“以为开了 NN 实际没开”的伪对照）
-                            let _ = umasim::neural::NeuralNetEvaluator::load(model_path)?;
-                            trainer.search = match game_config.mcts.rollout_policy.as_str() {
-                                "nn_greedy" => trainer.search.with_rollout_policy_nn_greedy(model_path.to_string()),
-                                "nn_sample" => trainer.search.with_rollout_policy_nn_sample(model_path.to_string()),
-                                _ => trainer.search,
-                            };
-                        }
-                        other => {
-                            return Err(anyhow::anyhow!(
-                                "未知 mcts.rollout_policy=\"{other}\"（仅支持 \"handwritten\" | \"nn_greedy\" | \"nn_sample\"）"
-                            ));
-                        }
-                    }
-
                     // E4：leaf eval 微批大小（batch=1 等价于逐样本推理；batch>1 才会启用 infer_batch）
                     trainer.search = trainer.search.with_rollout_batch_size(game_config.mcts.rollout_batch_size);
                     match game_config.scenario.as_str() {
@@ -408,17 +380,6 @@ async fn main() -> Result<()> {
                                         "[NN][leaf] stats: model_loads={}, infer_batches={}, infer_calls={}, infer_errors={}, infer_time_ms_total={:.2}",
                                         s.model_loads,
                                         s.infer_batches,
-                                        s.infer_calls,
-                                        s.infer_errors,
-                                        (s.infer_time_ns_total as f64) / 1_000_000.0
-                                    );
-                                }
-                            }
-                            if game_config.mcts.rollout_policy != "handwritten" {
-                                if let Some(s) = trainer.search.rollout_nn_stats() {
-                                    println!(
-                                        "[NN][rollout] stats: model_loads={}, infer_calls={}, infer_errors={}, infer_time_ms_total={:.2}",
-                                        s.model_loads,
                                         s.infer_calls,
                                         s.infer_errors,
                                         (s.infer_time_ns_total as f64) / 1_000_000.0

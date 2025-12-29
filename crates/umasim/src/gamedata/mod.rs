@@ -477,17 +477,6 @@ pub struct MctsConfig {
     /// 经验值：32（与默认 search_group_size 对齐），后续可按模型/CPU 调整。
     #[serde(default = "default_mcts_rollout_batch_size")]
     pub rollout_batch_size: usize,
-    /// E6：rollout 过程的动作选择策略（用于彻底规避手写 rollout policy 的上限）
-    ///
-    /// 当前阶段（E6-阶段1）策略：
-    /// - `"handwritten"`：rollout 动作选择沿用手写（现状）
-    /// - `"nn_greedy"`：rollout 动作选择使用 NN policy logits 对合法动作取 argmax
-    /// - `"nn_sample"`：rollout 动作选择使用 NN policy logits softmax 采样（更探索但波动更大）
-    ///
-    /// 重要：为了控制推理开销，本阶段 **事件选项（choice）仍保持手写**，
-    /// 即使 rollout_policy 为 nn_*，也只影响动作选择，不影响事件选项选择。
-    #[serde(default = "default_mcts_rollout_policy")]
-    pub rollout_policy: String,
     /// Policy softmax 温度（分数每降低多少，概率变成 1/e 倍）
     #[serde(default = "default_mcts_policy_delta")]
     pub policy_delta: f64,
@@ -515,7 +504,6 @@ impl Default for MctsConfig {
             max_depth: default_mcts_max_depth(),
             rollout_evaluator: default_mcts_rollout_evaluator(),
             rollout_batch_size: default_mcts_rollout_batch_size(),
-            rollout_policy: default_mcts_rollout_policy(),
             policy_delta: default_mcts_policy_delta(),
             use_ucb: default_mcts_use_ucb(),
             search_group_size: default_mcts_search_group_size(),
@@ -543,10 +531,6 @@ fn default_mcts_rollout_evaluator() -> String {
 
 fn default_mcts_rollout_batch_size() -> usize {
     32
-}
-
-fn default_mcts_rollout_policy() -> String {
-    "handwritten".to_string()
 }
 
 fn default_mcts_policy_delta() -> f64 {
