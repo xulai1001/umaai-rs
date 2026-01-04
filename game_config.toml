@@ -15,43 +15,37 @@ extra_count = [10, 0, 0, 20, 20, 50]
 # 传说秘泉(9) - 比赛+80%（⭐特殊：第三年9月强制选择）
 onsen_order = [
     1, 3, 2,    # 第一年
-    7, 5, 2,   # 第二年
+    6, 5, 2,   # 第二年
     8, 9,       # 第三年
-    4, 6     # 递补用
+    4, 7     # 递补用
 ]
 
 # 温泉选择是否允许蒙特卡洛自由发挥（为false时，严格按照上面的优先顺序选择）
 mcts_selected_onsen = true
 
 # 蒙特卡洛优先选择评分("score")还是PT("pt")
-mcts_selection = "pt"
+mcts_selection = "score"
 
-# 蒙特卡洛配置（仅当 trainer = "mcts" 时生效）
-#   search_n              - 搜索次数，每个动作模拟次数（默认10240，太慢的话可选2048,4096）
-#   radical_factor_max    - 激进度上限，越高越倾向可能有隐藏高回报的“表面昏招”（默认2）
-mcts = { search_n = 10240, radical_factor_max = 1.5 }
-
-# 日志级别: "debug" (完整显示) | "off" (全部关闭) | "info" (简要显示) | "trace" (详细显示) 
+# 日志级别: "debug" (完整显示) | "off" (全部关闭) | "info" (简要显示) | "trace" (详细显示)
 log_level = "off"
 
 # ---- 以下参数仅模拟中生效 ----
 # 模拟次数（默认1次，大于1时显示最高分/最低分面板和平均分）
+simulation_count = 10
 
-simulation_count = 300
-
-# 马娘ID 参考umaDB.json
-uma = 106301
+# 马娘ID 参考umaDB.json 大头 102303  大脚 106301 贵妇人 111601 大狗叫 113101 狂怒乐章 107901 成天路 107702 米欲 103003 真弓快车 108702
+uma = 102303
 
 # 卡组(ID, 突破等级, 参考gamedata/cardDB.json)
 # 温泉剧本需要包含友人卡 (chara_id = 9050)
-# 21110
-#cards = [302754, 302654, 302744, 302644, 302774, 302764]
-# 21101
-cards = [302424, 302764, 302794, 302564, 302614, 302754]
-# 20111
-#cards = [302754, 302654, 302484, 302644, 302774, 302764]
-# 32000
-#cards = [302754, 302654, 302814, 302794, 302424, 302764]
+# 21110 [力]美妙姿势 [速]气槽 [速]东海帝王 [耐]机伶金花  [根]黄金旅程 [友]保科健子 score_mean_threshold = 60000 choice_score_mean_threshold = 62000
+cards = [302834, 302824, 302754, 302744, 302644, 302764]
+# 20111 [速]气槽 [速]东海帝王 [力]美妙姿势 [根]黄金旅程 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
+#cards = [302824, 302754, 302834, 302644, 302484, 302764]
+# 21101 [速]气槽 [速]东海帝王 [耐]机伶金花 [力]美妙姿势 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58000 choice_score_mean_threshold = 60000
+#cards = [302824, 302754, 302744, 302834, 302484, 302764]
+# 32000 [速]爱慕律动 [速]气槽 [速]东海帝王 [耐]机伶金花 [耐]超常骏骥 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
+#cards = [302654, 302824, 302754, 302744, 302794, 302764]
 
 # 种马蓝因子个数 [速度, 耐力, 力量, 根性, 智力]
 blue_count = [12, 0, 6, 0, 0]
@@ -66,7 +60,142 @@ scenario = "onsen"
 #   "collector"   - 样本收集器（用于生成神经网络训练数据）
 #   "neuralnet"   - 神经网络训练员（使用 ONNX 模型进行决策）
 #   "mcts"        - 蒙特卡洛训练员（使用手写逻辑+mcts进行决策）
-trainer = "neuralnet"
+trainer = "mcts"
 
 # neuralnet ONNX 模型路径
-neuralnet_model_path = "saved_models/onsen_v15/model.onnx"
+neuralnet_model_path = "saved_models/onsen_v18/model.onnx"
+
+# 蒙特卡洛配置（仅当 trainer = "mcts" 时生效）
+[mcts]
+# 每个动作的搜索次数（默认 10240；太慢可选 256/512/1024/2048）
+search_n = 256
+# UCB 每组搜索次数（建议 <= search_n；越小越快但更噪）
+search_group_size = 32
+
+# 最大搜索深度（0=搜到游戏结束；>0=截断后用 leaf eval 估值）
+max_depth = 0
+
+# 激进度上限：越大越“搏高分尾部”
+radical_factor_max = 1.5
+
+# policy softmax 温度（训练时的 label 温度；搜索里也会用到）
+policy_delta = 100.0
+
+# UCB 搜索分配
+use_ucb = true
+search_cpuct = 1.0
+expected_search_stdev = 2200.0
+
+# leaf eval 微批大小（仅 max_depth>0 && rollout_evaluator="nn" 时生效）
+rollout_batch_size = 64
+
+# leaf eval 评估器（handwritten/nn）
+rollout_evaluator = "nn"
+
+# ---- mean-filter 数据收集（generate_mean_filtered_data）----
+# 说明：
+# - 该段仅供 `cargo run -p umasim --release --bin generate_mean_filtered_data` 使用
+# - 默认建议每次跑数用新的 output_dir；若想在同一目录续跑请保持配置不变并设置 resume=true
+# - overwrite=true 会清空输出目录，属于危险操作（建议仅在你明确要重跑时开启）
+
+[collector]
+# ========= 生成目标 =========
+
+# 目标写盘样本数（accepted_total：action+choice 的总和）
+target_samples = 40000
+
+# 最多模拟局数（防止阈值太高一直跑不满；达到 max_games 仍未凑够会提前结束）
+max_games = 200000
+
+# ========= 样本筛选（action）=========
+
+# action 样本阈值：当回合动作搜索 best.mean >= threshold 才会把该 action 样本写入数据集
+score_mean_threshold = 58000
+
+# 默认会丢弃 scoreMean==0 的样本（drop_zero_mean=true），且采样回合范围为 1..=78、stride=1。
+
+# ========= 输出（分片写盘 / manifest / resume）=========
+
+# 输出基础目录（建议填“父目录”）
+output_dir = "training_data"
+
+# 输出名称（自定义前缀）：最终会输出到 `output_dir/output_name/`（再按需追加时间戳）
+# - 会做路径安全过滤（自动去掉 Windows 不允许的字符）
+output_name = "mf_RUN_TODO"
+
+# 是否在输出目录名后自动追加时间戳：
+# - true: 每次运行输出到 `.../output_name_YYYYMMDD_HHMMSS/`（避免你每次手改目录名）
+# - false: 固定输出到 `.../output_name/`（适合长跑 + resume）
+output_append_timestamp = true
+
+# 时间戳格式（chrono strftime）
+output_timestamp_format = "%Y%m%d_%H%M%S"
+
+# 每个分片（part_*.bin）包含多少条样本；越大 IO 越少，但单次 flush 更大
+shard_size = 4096
+
+# manifest 文件名（输出目录内）
+manifest_name = "manifest.json"
+
+# scoreMean values 文件名（输出目录内，append-only；用于精确计算 p50/p90/p99）
+score_mean_values_name = "score_mean_values.bin"
+
+# 是否允许续跑（resume）
+# - true: 若输出目录已存在且有 part_*.bin，则扫描并从下一片继续写
+# - 注意：当 output_append_timestamp=true 时，每次启动都会生成新目录，通常不需要 resume（建议设为 false）
+resume = false
+
+# 是否允许覆盖（危险）默认 overwrite=false（不建议在配置里常驻，确有需要再临时加回）
+
+# ========= 并行与日志 =========
+
+# rayon 线程数（外层顺序跑 game；FlatSearch 内部使用该线程池并行）
+threads = 23
+
+# 进度输出间隔（按“已完成局数”）
+progress_interval = 5
+
+# ========= 搜索参数（SearchConfig 覆盖）=========
+
+# 每个动作搜索次数（search_n）
+# - 这是 action 样本质量/耗时的核心旋钮：越大越准也越慢
+search_n = 256
+
+# 是否启用 UCB 动态分配（true 时会分配更多搜索给好动作）
+use_ucb = true
+
+# UCB 每组搜索次数（重要！）
+# - 当 use_ucb=true 时，第一阶段会对每个动作先跑 search_group_size 次
+# - 代码会自动 clamp：search_group_size <= search_n
+search_group_size = 256
+
+# policy softmax 温度：越小分布越尖锐（更接近 one-hot），越大更平滑
+policy_delta = 100.0
+
+# 激进度上限：越大越“搏高分尾部”（更偏向高分高风险），越小越稳
+radical_factor_max = 1.5
+
+# UCB 探索常数（越大越倾向探索搜索次数少的动作）
+search_cpuct = 1.0
+
+# UCB 期望标准差（用于把“探索项”缩放到合适量级）
+expected_search_stdev = 2200.0
+
+# ========= choice 样本（P2）=========
+
+# 是否采集 decision event 的 choice 样本（用于训练 choice head）
+collect_choice = true
+
+# choice 评估：每个选项的 rollout 次数（越大越准也越慢；2/4/8 常用）
+choice_rollouts_per_option = 2
+
+# choice 样本阈值：best_choice.mean >= threshold 才写入 choice 样本
+# - 建议与 score_mean_threshold 保持一致起跑；如果 choice 样本太少，可适当降低
+choice_score_mean_threshold = 60500
+
+# choice 相关默认值说明（不再常驻配置）：
+# - choice_policy_delta=50.0
+# - choice_skip_if_too_many=true
+# - choice_follow_action_turn_range=true
+# - choice_rollout_on_uncollected_turns=false
+# - fast_after_target=true

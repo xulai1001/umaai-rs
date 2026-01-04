@@ -5251,6 +5251,45 @@
     ],
     "star": 5
   },
+  "106302": {
+    "bonusData": [],
+    "fiveStatusBonus": [
+      0,
+      10,
+      10,
+      10,
+      0
+    ],
+    "fiveStatusInitial": [
+      110,
+      100,
+      100,
+      120,
+      120
+    ],
+    "freeRaces": [],
+    "gameId": 106302,
+    "name": "[逍遥、整然たる路を]生野狄杜斯",
+    "preferRaces": [],
+    "preferReds": [],
+    "races": [
+      11,
+      22,
+      30,
+      31,
+      33,
+      43,
+      53,
+      55,
+      58,
+      59,
+      65,
+      68,
+      69,
+      71
+    ],
+    "star": 5
+  },
   "106401": {
     "bonusData": [],
     "fiveStatusBonus": [
@@ -6089,6 +6128,55 @@
     ],
     "gameId": 107601,
     "name": "[Saisir le rêve]樱花桂冠",
+    "preferRaces": [],
+    "preferReds": [],
+    "races": [
+      11,
+      48,
+      55,
+      67,
+      69,
+      71
+    ],
+    "star": 5
+  },
+  "107602": {
+    "bonusData": [],
+    "fiveStatusBonus": [
+      0,
+      10,
+      0,
+      20,
+      0
+    ],
+    "fiveStatusInitial": [
+      102,
+      127,
+      101,
+      106,
+      114
+    ],
+    "freeRaces": [
+      {
+        "startTurn": 12,
+        "endTurn": 24,
+        "count": 1
+      },
+      {
+        "startTurn": 25,
+        "endTurn": 31,
+        "count": 1,
+        "grade": 3
+      },
+      {
+        "startTurn": 32,
+        "endTurn": 45,
+        "count": 1,
+        "grade": 3
+      }
+    ],
+    "gameId": 107602,
+    "name": "[Nouvelle pousse]樱花桂冠",
     "preferRaces": [],
     "preferReds": [],
     "races": [

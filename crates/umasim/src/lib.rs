@@ -1,3 +1,4 @@
+pub mod collector;
 pub mod explain;
 pub mod game;
 pub mod gamedata;
