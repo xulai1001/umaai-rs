@@ -1,10 +1,10 @@
-use std::{io::Write, process::Command, sync::Mutex};
+use std::{io::Write, sync::Mutex};
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 use comfy_table::Table;
-use flexi_logger::{DeferredNow, Duplicate, FileSpec, LoggerHandle, style};
-use log::{Record, info, warn};
+use flexi_logger::{DeferredNow, Duplicate, FileSpec, style};
+use log::Record;
 use serde::Serialize;
 
 use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA, LOGGER};

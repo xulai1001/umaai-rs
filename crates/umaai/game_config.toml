@@ -4,12 +4,23 @@ scenario = "onsen"
 # 日志级别: "debug" (完整显示) | "off" (全部关闭) | "info" (简要显示) | "trace" (详细显示) 
 log_level = "info"
 
+# 温泉选择是否允许蒙特卡洛自由发挥（为false时，严格按照根目录的 onsen_order 优先顺序选择）
+mcts_selected_onsen = true
+
+# 蒙特卡洛优先选择评分("score")还是PT("pt")
+# 注意：当 mcts.max_depth>0 且 mcts.rollout_evaluator="nn" 时，当前版本强制要求为 "score"（避免 PT 口径干扰对照）。
+mcts_selection = "score"
+
+# 蒙特卡洛配置（umaai 实时推荐使用）
+mcts = { search_n = 1024, search_group_size = 64, max_depth = 32, rollout_evaluator = "handwritten", rollout_batch_size = 32, radical_factor_max = 1.5 }
+
 # 训练员类型:
 #   "manual"      - 手动选择（交互式，不支持多次模拟）
 #   "random"      - 猴子训练员（随机选择，用于基准测试）
 #   "handwritten" - 手写策略（快速，使用启发式规则）
 #   "collector"   - 样本收集器（用于生成神经网络训练数据）
 #   "neuralnet"   - 神经网络训练员（使用 ONNX 模型进行决策）
+#   "mcts"        - 蒙特卡洛训练员（使用手写逻辑+mcts 决策）
 #
 # 【样本收集模式说明】最初版本，马上就会改了
 # 当 trainer = "collector" 时
@@ -19,7 +30,7 @@ log_level = "info"
 #   4. 按最终分数排序，筛选 Top 1% 最强赛马娘精英样本
 #   5. 保存到 training_data.bin 文件
 # 运行命令: cargo run --release --bin umasim
-trainer = "neuralnet"
+trainer = "mcts"
 
 # 模拟次数（默认1次，大于1时显示最高分/最低分面板和平均分）
 
@@ -37,3 +48,6 @@ blue_count = [12, 0, 6, 0, 0]
 
 # 种马额外属性 [速度, 耐力, 力量, 根性, 智力, 技能点]
 extra_count = [10, 40, 0, 0, 40, 50]
+
+# neuralnet ONNX 模型路径（当 mcts.rollout_evaluator="nn" 或 trainer="neuralnet" 时使用）
+neuralnet_model_path = "saved_models/onsen_v17/model.onnx"

@@ -1,7 +1,7 @@
 //! umaai-rs - Rewrite UmaAI in Rust
 //!
 //! author: curran
-use std::time::Instant;
+use std::{path::Path, time::Instant};
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
@@ -14,12 +14,12 @@ use umasim::{
         Game,
         InheritInfo,
         Trainer,
-        onsen::{OnsenTurnStage, action::OnsenAction, game::OnsenGame}
+        onsen::{OnsenTurnStage, action::OnsenAction}
     },
-    gamedata::{GameConfig, MctsConfig, init_global},
+    gamedata::{GameConfig, init_global},
     neural::{Evaluator, NeuralNetEvaluator},
     search::SearchConfig,
-    trainer::{MctsTrainer, NeuralNetTrainer},
+    trainer::MctsTrainer,
     utils::{check_windows_terminal, check_working_dir, init_logger, pause}
 };
 
@@ -83,6 +83,43 @@ async fn main_guard() -> Result<()> {
     let mut trainer = MctsTrainer::new(mcts_config).verbose(true);
     trainer.mcts_onsen = game_config.mcts_selected_onsen;
     trainer.mcts_selection = game_config.mcts_selection.clone();
+
+    // P3-MVP：leaf eval 评估器开关（用于 A/B 对照）
+    match game_config.mcts.rollout_evaluator.as_str() {
+        "handwritten" => {
+            trainer.search = trainer.search.with_leaf_evaluator_handwritten();
+        }
+        "nn" => {
+            if game_config.mcts.max_depth == 0 {
+                println!(
+                    "警告: mcts.rollout_evaluator=\"nn\" 但 mcts.max_depth=0，leaf eval 不会被使用（等价于旧路径）"
+                );
+            }
+            if game_config.mcts_selection == "pt" && game_config.mcts.max_depth > 0 {
+                return Err(anyhow!(
+                    "E4 验收约束：mcts.rollout_evaluator=\"nn\" 且 max_depth>0 时禁止 mcts_selection=\"pt\"；请改为 \"score\""
+                ));
+            }
+
+            let model_path = game_config.neuralnet_model_path.as_str();
+            if !Path::new(model_path).exists() {
+                return Err(anyhow!(
+                    "mcts.rollout_evaluator=\"nn\" 但模型文件不存在: {model_path}"
+                ));
+            }
+            // 先验证模型可加载（避免“以为开了 NN 实际没开”的伪对照）
+            let _ = NeuralNetEvaluator::load(model_path)?;
+            trainer.search = trainer.search.with_leaf_evaluator_nn(model_path.to_string());
+        }
+        other => {
+            return Err(anyhow!(
+                "未知 mcts.rollout_evaluator=\"{other}\"（仅支持 \"handwritten\" | \"nn\"）"
+            ));
+        }
+    }
+
+    // E4：leaf eval 微批大小（batch=1 等价于逐样本推理；batch>1 才会启用 infer_batch）
+    trainer.search = trainer.search.with_rollout_batch_size(game_config.mcts.rollout_batch_size);
 
     // 开始检测文件
     let mut watcher = UraFileWatcher::init()?;
@@ -184,8 +221,7 @@ mod tests {
     use log::info;
     use notify::{Event, RecursiveMode, Watcher};
     use umasim::{
-        game::Game,
-        gamedata::{GameConfig, init_global},
+        gamedata::init_global,
         utils::init_logger
     };
 

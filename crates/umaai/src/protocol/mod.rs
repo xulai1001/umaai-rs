@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use log::{info, warn};
+use log::warn;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use umasim::{
     game::{BaseGame, FriendOutState, FriendState, InheritInfo, SupportCard, TurnStage, Uma, UmaFlags},

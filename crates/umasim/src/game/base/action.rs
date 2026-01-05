@@ -3,7 +3,7 @@ use std::fmt::Display;
 use anyhow::{Result, anyhow};
 use rand::{Rng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     game::{base::*, *},

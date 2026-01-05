@@ -189,7 +189,7 @@ impl Uma {
         let mut score = self.skill_score + (self.total_pt() as f32 * cons.pt_score_rate) as i32;
         score = ((score as f32) * cons.pt_favor_rate) as i32;
         for i in 0..5 {
-            let mut status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
+            let status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
             // 压缩超过1200的部分
             /*if status >= 1200 {
                 status = (1200.0 + (status - 1200) as f32 * cons.five_status_favor_rate[i]) as usize;
@@ -230,7 +230,6 @@ impl Uma {
 
 #[cfg(test)]
 mod tests {
-    use log::LevelFilter;
 
     use super::*;
     use crate::gamedata::init_global;

@@ -11,7 +11,11 @@
 //! - scoreStdev = STDEV_SCALE * abs(output[59])
 //! - value = VALUE_MEAN + VALUE_SCALE * output[60]
 
-use std::sync::Arc;
+use std::{
+    cell::RefCell,
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    time::Instant,
+};
 
 use anyhow::{Context, Result};
 use rand::{Rng, rngs::StdRng};
@@ -53,6 +57,41 @@ const STDEV_SCALE: f64 = 150.0;
 
 type OnnxModel = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
 
+fn load_onnx_model(model_path: &str) -> Result<OnnxModel> {
+    tract_onnx::onnx()
+        .model_for_path(model_path)
+        .context("无法读取 ONNX 模型文件")?
+        .into_optimized()
+        .context("模型优化失败")?
+        .into_runnable()
+        .context("模型转换失败")
+}
+
+fn extract_value_from_output(output: &[f32]) -> ValueOutput {
+    let score_mean = VALUE_MEAN + VALUE_SCALE * output[POLICY_DIM + CHOICE_DIM] as f64;
+    let score_stdev = STDEV_SCALE * output[POLICY_DIM + CHOICE_DIM + 1] as f64;
+    ValueOutput::new(score_mean, score_stdev.abs())
+}
+
+thread_local! {
+    static THREAD_LOCAL_MODEL: RefCell<Option<(String, OnnxModel)>> = RefCell::new(None);
+}
+
+fn action_to_global_index_v1(action: &OnsenAction) -> Option<usize> {
+    match action {
+        OnsenAction::Train(t) => Some(*t as usize),
+        OnsenAction::Sleep => Some(5),
+        OnsenAction::NormalOuting => Some(6),
+        OnsenAction::FriendOuting => Some(7),
+        OnsenAction::Race => Some(8),
+        OnsenAction::Clinic => Some(9),
+        OnsenAction::PR => Some(10),
+        OnsenAction::Dig(idx) => Some(11 + *idx as usize),
+        OnsenAction::Upgrade(idx) => Some(21 + *idx as usize),
+        OnsenAction::UseTicket(is_super) => Some(if *is_super { 25 } else { 24 }),
+    }
+}
+
 // ============================================================================
 // NeuralNetEvaluator
 // ============================================================================
@@ -77,13 +116,7 @@ impl NeuralNetEvaluator {
     pub fn load(model_path: &str) -> Result<Self> {
         log::info!("加载 ONNX 模型: {}", model_path);
 
-        let model = tract_onnx::onnx()
-            .model_for_path(model_path)
-            .context("无法读取 ONNX 模型文件")?
-            .into_optimized()
-            .context("模型优化失败")?
-            .into_runnable()
-            .context("模型转换失败")?;
+        let model = load_onnx_model(model_path)?;
 
         log::info!("ONNX 模型加载成功");
 
@@ -133,10 +166,8 @@ impl NeuralNetEvaluator {
 
     /// 从输出中提取 Value（反归一化）
     fn extract_value(&self, output: &[f32]) -> ValueOutput {
-        let score_mean = VALUE_MEAN + VALUE_SCALE * output[POLICY_DIM + CHOICE_DIM] as f64;
-        let score_stdev = STDEV_SCALE * output[POLICY_DIM + CHOICE_DIM + 1] as f64;
         // output[POLICY_DIM + CHOICE_DIM + 2] 是 value，但我们使用 score_mean 作为主要评估值
-        ValueOutput::new(score_mean, score_stdev.abs())
+        extract_value_from_output(output)
     }
 
     /// 根据 Policy logits 采样选择动作索引
@@ -186,23 +217,224 @@ impl NeuralNetEvaluator {
         // 理论上不会走到这里，兜底返回最后一个合法动作
         legal_mask.iter().rposition(|&x| x).unwrap_or(0)
     }
-
+/*
     /// 将动作转换为全局索引
     ///
     /// 与 sample_collector::action_to_global_index 保持一致
     fn action_to_global_index(action: &OnsenAction) -> Option<usize> {
-        match action {
-            OnsenAction::Train(t) => Some(*t as usize),
-            OnsenAction::Sleep => Some(5),
-            OnsenAction::NormalOuting => Some(6),
-            OnsenAction::FriendOuting => Some(7),
-            OnsenAction::Race => Some(8),
-            OnsenAction::Clinic => Some(9),
-            OnsenAction::PR => Some(10),
-            OnsenAction::Dig(idx) => Some(11 + *idx as usize),
-            OnsenAction::Upgrade(idx) => Some(21 + *idx as usize),
-            OnsenAction::UseTicket(is_super) => Some(if *is_super { 25 } else { 24 })
+        action_to_global_index_v1(action)
+    }
+    */
+}
+
+// ============================================================================
+// ThreadLocalNeuralNetLeafEvaluator
+// ============================================================================
+
+/// 搜索 leaf eval 专用：每线程懒加载一份模型，避免跨线程共享 `SimplePlan` 的线程安全风险。
+#[derive(Clone)]
+pub struct ThreadLocalNeuralNetLeafEvaluator {
+    model_path: Arc<String>,
+    stats: Arc<ThreadLocalNeuralNetLeafStats>,
+}
+
+#[derive(Debug)]
+struct ThreadLocalNeuralNetLeafStats {
+    model_loads: AtomicU64,
+    infer_batches: AtomicU64,
+    infer_calls: AtomicU64,
+    infer_errors: AtomicU64,
+    infer_time_ns_total: AtomicU64,
+}
+
+impl ThreadLocalNeuralNetLeafStats {
+    fn new() -> Self {
+        Self {
+            model_loads: AtomicU64::new(0),
+            infer_batches: AtomicU64::new(0),
+            infer_calls: AtomicU64::new(0),
+            infer_errors: AtomicU64::new(0),
+            infer_time_ns_total: AtomicU64::new(0),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ThreadLocalNeuralNetLeafStatsSnapshot {
+    pub model_loads: u64,
+    pub infer_batches: u64,
+    pub infer_calls: u64,
+    pub infer_errors: u64,
+    pub infer_time_ns_total: u64,
+}
+
+impl ThreadLocalNeuralNetLeafEvaluator {
+    pub fn new(model_path: impl Into<String>) -> Self {
+        Self {
+            model_path: Arc::new(model_path.into()),
+            stats: Arc::new(ThreadLocalNeuralNetLeafStats::new()),
+        }
+    }
+
+    pub fn stats(&self) -> ThreadLocalNeuralNetLeafStatsSnapshot {
+        ThreadLocalNeuralNetLeafStatsSnapshot {
+            model_loads: self.stats.model_loads.load(Ordering::Relaxed),
+            infer_batches: self.stats.infer_batches.load(Ordering::Relaxed),
+            infer_calls: self.stats.infer_calls.load(Ordering::Relaxed),
+            infer_errors: self.stats.infer_errors.load(Ordering::Relaxed),
+            infer_time_ns_total: self.stats.infer_time_ns_total.load(Ordering::Relaxed),
+        }
+    }
+
+    /// 微批推理：输入 [batch,1121] 的扁平数组，输出 [batch,61] 的扁平数组。
+    ///
+    /// - 当模型不支持动态 batch 时，会回退为循环 `infer(1)`（并打印 warning）。
+    pub fn infer_batch(&self, features_flat: &[f32], batch: usize) -> Result<Vec<f32>> {
+        if batch == 0 {
+            anyhow::bail!("batch 不能为 0");
+        }
+        if features_flat.len() != batch * INPUT_DIM {
+            anyhow::bail!(
+                "输入维度错误: 期望 {} (=batch*INPUT_DIM), 实际 {}",
+                batch * INPUT_DIM,
+                features_flat.len()
+            );
+        }
+
+        // 计数：一次 batch 调用，覆盖 batch 个样本
+        self.stats.infer_batches.fetch_add(1, Ordering::Relaxed);
+        self.stats.infer_calls.fetch_add(batch as u64, Ordering::Relaxed);
+        let t0 = Instant::now();
+
+        let run_once = |model: &OnnxModel| -> Result<Vec<f32>> {
+            let input = tract_ndarray::Array2::from_shape_vec((batch, INPUT_DIM), features_flat.to_vec())
+                .context("创建 batch 输入张量失败")?;
+            let output = model.run(tvec!(input.into_tvalue())).context("batch 推理失败")?;
+            let output_tensor = output[0].to_array_view::<f32>().context("提取 batch 输出张量失败")?;
+            let out: Vec<f32> = output_tensor.iter().copied().collect();
+            if out.len() != batch * OUTPUT_DIM {
+                anyhow::bail!(
+                    "batch 输出维度错误: 期望 {} (=batch*OUTPUT_DIM), 实际 {}",
+                    batch * OUTPUT_DIM,
+                    out.len()
+                );
+            }
+            Ok(out)
+        };
+
+        let result = THREAD_LOCAL_MODEL.with(|slot| -> Result<Vec<f32>> {
+            let mut slot = slot.borrow_mut();
+            let need_reload = match slot.as_ref() {
+                Some((p, _)) => p != self.model_path.as_str(),
+                None => true,
+            };
+            if need_reload {
+                log::info!("[NN][leaf] 线程内加载模型: {}", self.model_path.as_str());
+                let model = load_onnx_model(self.model_path.as_str())?;
+                *slot = Some((self.model_path.as_str().to_string(), model));
+                self.stats.model_loads.fetch_add(1, Ordering::Relaxed);
+            }
+
+            let (_, model) = slot.as_ref().expect("thread_local model");
+
+            // 先尝试动态 batch（ONNX 导出脚本已开启 dynamic_axes）
+            match run_once(model) {
+                Ok(v) => Ok(v),
+                Err(e) => {
+                    // 降级：逐样本 infer(1)，保证功能不挂（但会很慢）
+                    log::warn!(
+                        "[NN][leaf] batch 推理失败，回退为逐样本 infer(1)（性能受限）。原因: {e}"
+                    );
+                    let mut out_all = Vec::with_capacity(batch * OUTPUT_DIM);
+                    for i in 0..batch {
+                        let start = i * INPUT_DIM;
+                        let end = start + INPUT_DIM;
+
+                        let input = tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features_flat[start..end].to_vec())
+                            .context("创建单样本输入张量失败")?;
+                        let output = model.run(tvec!(input.into_tvalue())).context("单样本推理失败")?;
+                        let output_tensor = output[0].to_array_view::<f32>().context("提取单样本输出张量失败")?;
+                        let out: Vec<f32> = output_tensor.iter().copied().collect();
+                        if out.len() != OUTPUT_DIM {
+                            anyhow::bail!("单样本输出维度错误: 期望 {}, 实际 {}", OUTPUT_DIM, out.len());
+                        }
+                        out_all.extend_from_slice(&out);
+                    }
+                    Ok(out_all)
+                }
+            }
+        });
+
+        let elapsed_ns: u64 = t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.stats.infer_time_ns_total.fetch_add(elapsed_ns, Ordering::Relaxed);
+        if result.is_err() {
+            self.stats.infer_errors.fetch_add(1, Ordering::Relaxed);
+        }
+        result
+    }
+
+    /// 给定一批 features，直接返回每个样本的 value 输出（mean/stdev）。
+    pub fn evaluate_features_batch(&self, features_flat: &[f32], batch: usize) -> Result<Vec<ValueOutput>> {
+        let out = self.infer_batch(features_flat, batch)?;
+        let mut values = Vec::with_capacity(batch);
+        for i in 0..batch {
+            let start = i * OUTPUT_DIM;
+            let end = start + OUTPUT_DIM;
+            values.push(extract_value_from_output(&out[start..end]));
+        }
+        Ok(values)
+    }
+
+    fn infer(&self, features: &[f32]) -> Result<Vec<f32>> {
+        if features.len() != INPUT_DIM {
+            anyhow::bail!("输入维度错误: 期望 {}, 实际 {}", INPUT_DIM, features.len());
+        }
+
+        self.stats.infer_batches.fetch_add(1, Ordering::Relaxed);
+        self.stats.infer_calls.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
+
+        let result = THREAD_LOCAL_MODEL.with(|slot| -> Result<Vec<f32>> {
+            let mut slot = slot.borrow_mut();
+            let need_reload = match slot.as_ref() {
+                Some((p, _)) => p != self.model_path.as_str(),
+                None => true,
+            };
+            if need_reload {
+                log::info!("[NN][leaf] 线程内加载模型: {}", self.model_path.as_str());
+                let model = load_onnx_model(self.model_path.as_str())?;
+                *slot = Some((self.model_path.as_str().to_string(), model));
+                self.stats.model_loads.fetch_add(1, Ordering::Relaxed);
+            }
+
+            let (_, model) = slot.as_ref().expect("thread_local model");
+
+            // 创建输入张量 [1, 1121]
+            let input = tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features.to_vec())
+                .context("创建输入张量失败")?;
+
+            // 运行推理
+            let output = model.run(tvec!(input.into_tvalue())).context("推理失败")?;
+
+            // 提取输出
+            let output_tensor = output[0].to_array_view::<f32>().context("提取输出张量失败")?;
+            let out: Vec<f32> = output_tensor.iter().copied().collect();
+
+            if out.len() != OUTPUT_DIM {
+                anyhow::bail!("输出维度错误: 期望 {}, 实际 {}", OUTPUT_DIM, out.len());
+            }
+
+            Ok(out)
+        });
+
+        let elapsed_ns: u64 = t0.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+        self.stats.infer_time_ns_total.fetch_add(elapsed_ns, Ordering::Relaxed);
+
+        if result.is_err() {
+            self.stats.infer_errors.fetch_add(1, Ordering::Relaxed);
+        }
+
+        result
     }
 }
 
@@ -237,7 +469,7 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
         // 构建合法动作掩码（使用全局动作索引）
         let mut legal_mask = vec![false; POLICY_DIM];
         for action in &actions {
-            if let Some(idx) = Self::action_to_global_index(action) {
+            if let Some(idx) = action_to_global_index_v1(action) {
                 if idx < POLICY_DIM {
                     legal_mask[idx] = true;
                 }
@@ -249,7 +481,7 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
 
         // 找到对应的动作
         for action in &actions {
-            if let Some(idx) = Self::action_to_global_index(action) {
+            if let Some(idx) = action_to_global_index_v1(action) {
                 if idx == global_idx {
                     return Some(ActionScore::new(action.clone(), actions, vec![]));
                 }
@@ -327,7 +559,7 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
         let mut best_value = f32::NEG_INFINITY;
 
         for (action_idx, action) in actions.iter().enumerate() {
-            if let Some(global_idx) = Self::action_to_global_index(action) {
+            if let Some(global_idx) = action_to_global_index_v1(action) {
                 if global_idx < policy.len() {
                     let value = policy[global_idx];
                     if value > best_value {
@@ -339,6 +571,34 @@ impl Evaluator<OnsenGame> for NeuralNetEvaluator {
         }
 
         best_idx
+    }
+}
+
+impl Evaluator<OnsenGame> for ThreadLocalNeuralNetLeafEvaluator {
+    fn select_action(&self, _game: &OnsenGame, _rng: &mut StdRng) -> Option<ActionScore<OnsenAction>> {
+        // leaf eval 专用：不在 rollout 过程中使用 NN policy（避免混变量）
+        None
+    }
+
+    fn evaluate(&self, game: &OnsenGame) -> ValueOutput {
+        // 如果游戏结束，返回实际分数
+        if game.turn >= game.max_turn() {
+            let score = game.uma.calc_score() as f64;
+            return ValueOutput::new(score, 0.0);
+        }
+
+        let features = game.extract_nn_features(None);
+        match self.infer(&features) {
+            Ok(output) => extract_value_from_output(&output),
+            Err(e) => {
+                log::warn!("[NN][leaf] 推理失败: {}", e);
+                // 回退到简单评估（不允许 silent fallback：必须有日志）
+                let score = game.uma.calc_score() as f64;
+                let progress = game.turn as f64 / game.max_turn() as f64;
+                let stdev = 500.0 * (1.0 - progress) + 100.0;
+                ValueOutput::new(score, stdev)
+            }
+        }
     }
 }
 

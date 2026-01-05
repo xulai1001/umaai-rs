@@ -6,3 +6,5 @@ logs
 *.svg
 saved_models
 pub
+docs
+training

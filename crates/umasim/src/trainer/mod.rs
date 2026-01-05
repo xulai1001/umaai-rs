@@ -11,11 +11,13 @@ use crate::{
 // 导出手写逻辑训练员、数据收集训练员、神经网络训练员和 MCTS 训练员
 pub mod collector_trainer;
 pub mod handwritten_trainer;
+pub mod mean_filter_collector_trainer;
 pub mod mcts_trainer;
 pub mod neural_net_trainer;
 
 pub use collector_trainer::CollectorTrainer;
 pub use handwritten_trainer::HandwrittenTrainer;
+pub use mean_filter_collector_trainer::MeanFilterCollectorTrainer;
 pub use mcts_trainer::MctsTrainer;
 pub use neural_net_trainer::NeuralNetTrainer;
 

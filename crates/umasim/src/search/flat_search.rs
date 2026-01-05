@@ -19,8 +19,36 @@ use crate::{
         Game,
         onsen::{action::OnsenAction, game::OnsenGame}
     },
-    neural::{Evaluator, HandwrittenEvaluator}
+    neural::{
+        Evaluator,
+        HandwrittenEvaluator,
+        ThreadLocalNeuralNetLeafEvaluator,
+        ThreadLocalNeuralNetLeafStatsSnapshot,
+        ValueOutput,
+    }
 };
+
+#[derive(Clone)]
+enum LeafEvaluator {
+    Handwritten,
+    NeuralNet(ThreadLocalNeuralNetLeafEvaluator),
+}
+
+impl LeafEvaluator {
+    fn name(&self) -> &'static str {
+        match self {
+            LeafEvaluator::Handwritten => "handwritten",
+            LeafEvaluator::NeuralNet(_) => "nn",
+        }
+    }
+
+    fn evaluate(&self, rollout_evaluator: &HandwrittenEvaluator, game: &OnsenGame) -> ValueOutput {
+        match self {
+            LeafEvaluator::Handwritten => rollout_evaluator.evaluate(game),
+            LeafEvaluator::NeuralNet(nn) => nn.evaluate(game),
+        }
+    }
+}
 
 /// 扁平蒙特卡洛搜索
 ///
@@ -28,18 +56,26 @@ use crate::{
 #[derive(Clone)]
 pub struct FlatSearch {
     /// 手写评估器（用于模拟）
-    evaluator: HandwrittenEvaluator,
+    rollout_evaluator: HandwrittenEvaluator,
+
+    /// leaf eval 评估器（用于 max_depth>0 截断估值）
+    leaf_evaluator: LeafEvaluator,
 
     /// 搜索配置
-    config: SearchConfig
+    config: SearchConfig,
+
+    /// E4：leaf eval 微批大小（仅在 max_depth>0 && leaf_eval=nn 时生效）
+    rollout_batch_size: usize,
 }
 
 impl FlatSearch {
     /// 创建搜索器
     pub fn new(config: SearchConfig) -> Self {
         Self {
-            evaluator: HandwrittenEvaluator::new(),
-            config
+            rollout_evaluator: HandwrittenEvaluator::new(),
+            leaf_evaluator: LeafEvaluator::Handwritten,
+            config,
+            rollout_batch_size: 1,
         }
     }
 
@@ -48,9 +84,47 @@ impl FlatSearch {
         Self::new(SearchConfig::default())
     }
 
+    /// 设置 leaf eval 为神经网络（用于 max_depth>0 截断估值）
+    pub fn with_leaf_evaluator_nn(mut self, model_path: impl Into<String>) -> Self {
+        self.leaf_evaluator = LeafEvaluator::NeuralNet(ThreadLocalNeuralNetLeafEvaluator::new(model_path));
+        self
+    }
+
+    /// 强制 leaf eval 回退为 handwritten（默认）
+    pub fn with_leaf_evaluator_handwritten(mut self) -> Self {
+        self.leaf_evaluator = LeafEvaluator::Handwritten;
+        self
+    }
+
+    /// 设置 leaf eval 微批大小（仅 nn leaf 生效）
+    pub fn with_rollout_batch_size(mut self, batch_size: usize) -> Self {
+        self.rollout_batch_size = batch_size.max(1).min(1024);
+        self
+    }
+
     /// 获取配置
     pub fn config(&self) -> &SearchConfig {
         &self.config
+    }
+
+    /// E4 调试：获取 leaf NN 推理统计（仅当 leaf evaluator 为 nn 时存在）
+    pub fn leaf_nn_stats(&self) -> Option<ThreadLocalNeuralNetLeafStatsSnapshot> {
+        match &self.leaf_evaluator {
+            LeafEvaluator::NeuralNet(nn) => Some(nn.stats()),
+            _ => None,
+        }
+    }
+
+    fn use_parallel_simulation(&self) -> bool {
+        // E4.3：leaf eval 使用 thread_local 模型后，可安全恢复 Rayon 并行
+        true
+    }
+
+    fn leaf_nn(&self) -> Option<&ThreadLocalNeuralNetLeafEvaluator> {
+        match &self.leaf_evaluator {
+            LeafEvaluator::NeuralNet(nn) => Some(nn),
+            _ => None,
+        }
     }
 
     /// 执行搜索
@@ -74,10 +148,12 @@ impl FlatSearch {
         let radical_factor = self.compute_radical_factor(game.turn as usize);
 
         debug!(
-            "[回合 {}] 开始搜索: {} 个动作, search_n={}, radical_factor={:.1}, ucb={}",
+            "[回合 {}] 开始搜索: {} 个动作, search_n={}, max_depth={}, leaf_eval={}, radical_factor={:.1}, ucb={}",
             game.turn,
             actions.len(),
             self.config.search_n,
+            self.config.max_depth,
+            self.leaf_evaluator.name(),
             radical_factor,
             self.config.use_ucb
         );
@@ -107,23 +183,33 @@ impl FlatSearch {
     ///
     /// 每个动作平均分配 search_n 次搜索，使用 Rayon 并行化。
     fn search_uniform(&self, game: &OnsenGame, actions: &[OnsenAction]) -> Result<Vec<(ActionResult, ActionResult)>> {
-        let ret = actions
-            .par_iter()
-            .map(|action| {
-                let mut result = ActionResult::new();
-                let mut result_pt = ActionResult::new();
-                // 每个线程初始化一次 RNG
-                let mut thread_rng = StdRng::from_os_rng();
-                for _ in 0..self.config.search_n {
-                    if let Ok(score) = self.simulate(game, action, &mut thread_rng) {
-                        result.add(score.0);
-                        result_pt.add(score.1);
-                    }
-                }
-                (result, result_pt)
-            })
-            .collect();
-        Ok(ret)
+        let use_parallel = self.use_parallel_simulation();
+        if use_parallel {
+            let ret = actions
+                .par_iter()
+                .map(|action| {
+                    let mut result = ActionResult::new();
+                    let mut result_pt = ActionResult::new();
+                    // 每个线程初始化一次 RNG
+                    let mut thread_rng = StdRng::from_os_rng();
+                    let _ = self.simulate_many(game, action, self.config.search_n, &mut thread_rng, &mut result, &mut result_pt);
+                    (result, result_pt)
+                })
+                .collect();
+            Ok(ret)
+        } else {
+            let ret = actions
+                .iter()
+                .map(|action| {
+                    let mut result = ActionResult::new();
+                    let mut result_pt = ActionResult::new();
+                    let mut thread_rng = StdRng::from_os_rng();
+                    let _ = self.simulate_many(game, action, self.config.search_n, &mut thread_rng, &mut result, &mut result_pt);
+                    (result, result_pt)
+                })
+                .collect();
+            Ok(ret)
+        }
     }
 
     /// UCB 动态分配搜索
@@ -139,23 +225,32 @@ impl FlatSearch {
         let num_actions = actions.len();
         let mut action_results: Vec<(ActionResult, ActionResult)> = vec![Default::default(); num_actions];
         let group_size = self.config.search_group_size;
+        let use_parallel = self.use_parallel_simulation();
 
         // 第一阶段：每个动作先搜一组（并行）
-        let initial_results: Vec<_> = actions
-            .par_iter()
-            .map(|action| {
-                let mut result = ActionResult::new();
-                let mut result_pt = ActionResult::new();
-                let mut thread_rng = StdRng::from_os_rng();
-                for _ in 0..group_size {
-                    if let Ok(score) = self.simulate(game, action, &mut thread_rng) {
-                        result.add(score.0);
-                        result_pt.add(score.1);
-                    }
-                }
-                (result, result_pt)
-            })
-            .collect();
+        let initial_results: Vec<_> = if use_parallel {
+            actions
+                .par_iter()
+                .map(|action| {
+                    let mut result = ActionResult::new();
+                    let mut result_pt = ActionResult::new();
+                    let mut thread_rng = StdRng::from_os_rng();
+                    let _ = self.simulate_many(game, action, group_size, &mut thread_rng, &mut result, &mut result_pt);
+                    (result, result_pt)
+                })
+                .collect()
+        } else {
+            actions
+                .iter()
+                .map(|action| {
+                    let mut result = ActionResult::new();
+                    let mut result_pt = ActionResult::new();
+                    let mut thread_rng = StdRng::from_os_rng();
+                    let _ = self.simulate_many(game, action, group_size, &mut thread_rng, &mut result, &mut result_pt);
+                    (result, result_pt)
+                })
+                .collect()
+        };
 
         // 合并初始结果
         for (i, result) in initial_results.into_iter().enumerate() {
@@ -177,17 +272,92 @@ impl FlatSearch {
 
             // 对选中的动作搜索一组（并行）
             let action = &actions[best_action_idx];
-            let scores: Vec<_> = (0..group_size)
-                .into_par_iter()
-                .filter_map(|_| {
+            // E4：nn leaf 时，rollout 收集 leaf features -> infer_batch -> 写入结果
+            if self.config.max_depth > 0 && self.leaf_nn().is_some() && self.rollout_batch_size > 1 {
+                let nn = self.leaf_nn().expect("nn");
+
+                let outcomes: Vec<_> = if use_parallel {
+                    (0..group_size)
+                        .into_par_iter()
+                        // E4.3-7)：每个 worker 只初始化一次 RNG，避免 tight loop 里反复 from_os_rng()
+                        .map_init(|| StdRng::from_os_rng(), |rng, _| self.simulate_until_terminal_or_leaf(game, action, rng).ok())
+                        .filter_map(|x| x)
+                        .collect()
+                } else {
+                    let mut out = Vec::with_capacity(group_size);
                     let mut thread_rng = StdRng::from_os_rng();
-                    self.simulate(game, action, &mut thread_rng).ok()
-                })
-                .collect();
+                    for _ in 0..group_size {
+                        if let Ok(v) = self.simulate_until_terminal_or_leaf(game, action, &mut thread_rng) {
+                            out.push(v);
+                        }
+                    }
+                    out
+                };
+
+                let mut leaf_features: Vec<f32> = Vec::new();
+                let mut leaf_pt_bias: Vec<f64> = Vec::new();
+
+                for o in outcomes {
+                    match o {
+                        SimOutcome::Terminal { score, score_pt } => {
+                            action_results[best_action_idx].0.add(score);
+                            action_results[best_action_idx].1.add(score_pt);
+                        }
+                        SimOutcome::Leaf { features, pt_bias } => {
+                            leaf_features.extend_from_slice(&features);
+                            leaf_pt_bias.push(pt_bias);
+                        }
+                    }
+                }
+
+                if !leaf_pt_bias.is_empty() {
+                    let leaf_n = leaf_pt_bias.len();
+                    match nn.evaluate_features_batch(&leaf_features, leaf_n) {
+                        Ok(values) => {
+                            for (i, v) in values.into_iter().enumerate() {
+                                let score_mean = v.score_mean;
+                                action_results[best_action_idx].0.add(score_mean);
+                                action_results[best_action_idx].1.add(score_mean + leaf_pt_bias[i]);
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("[NN][leaf] infer_batch 失败，回退逐样本（性能受限）: {e}");
+                            for i in 0..leaf_n {
+                                let start = i * 1121;
+                                let end = start + 1121;
+                                if let Ok(v) = nn.evaluate_features_batch(&leaf_features[start..end], 1) {
+                                    let score_mean = v[0].score_mean;
+                                    action_results[best_action_idx].0.add(score_mean);
+                                    action_results[best_action_idx].1.add(score_mean + leaf_pt_bias[i]);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+            let scores: Vec<_> = if use_parallel {
+                (0..group_size)
+                    .into_par_iter()
+                        // E4.3-7)：每个 worker 只初始化一次 RNG，避免 tight loop 里反复 from_os_rng()
+                        .map_init(|| StdRng::from_os_rng(), |rng, _| self.simulate(game, action, rng).ok())
+                        .filter_map(|x| x)
+                    .collect()
+            } else {
+                    // 单线程分支：复用同一个 RNG，避免每次 rollout 都 from_os_rng() 的高开销
+                let mut out = Vec::with_capacity(group_size);
+                    let mut thread_rng = StdRng::from_os_rng();
+                    for _ in 0..group_size {
+                    if let Ok(v) = self.simulate(game, action, &mut thread_rng) {
+                        out.push(v);
+                    }
+                }
+                out
+            };
 
             for score in scores {
                 action_results[best_action_idx].0.add(score.0);
                 action_results[best_action_idx].1.add(score.1);
+                }
             }
 
             total_n += group_size as f64;
@@ -248,25 +418,193 @@ impl FlatSearch {
         } else {
             // 克隆游戏状态
             let mut sim_game = game.clone();
-            let trainer = SimulationTrainer { evaluator: &self.evaluator };
+            let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
 
             // 执行初始动作
             sim_game.apply_action(action, rng)?;
 
-            // 推进到下一阶段，继续运行直到游戏结束
-            while sim_game.next() {
-                sim_game.run_stage(&trainer, rng)?;
+            // max_depth==0：保持旧行为，rollout 跑到终局
+            if self.config.max_depth == 0 {
+                while sim_game.next() {
+                    sim_game.run_stage(&trainer_hw, rng)?;
+                }
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
+                return Ok((
+                    sim_game.uma().calc_score() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                ));
             }
 
-            // 触发育成结束奖励
-            sim_game.on_simulation_end(&trainer, rng)?;
+            // max_depth>0：按 turn 截断；未终局则 leaf eval 估值
+            let start_turn = sim_game.turn;
+            let max_depth = self.config.max_depth as i32;
+            let mut finished = false;
 
-            // 返回最终分数
-            Ok((
-                sim_game.uma().calc_score() as f64,
-                sim_game.uma().calc_score_with_pt_favor() as f64
-            ))
+            loop {
+                if !sim_game.next() {
+                    finished = true;
+                    break;
+                }
+                sim_game.run_stage(&trainer_hw, rng)?;
+                if (sim_game.turn - start_turn) >= max_depth {
+                    break;
+                }
+            }
+
+            if finished {
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
+                return Ok((
+                    sim_game.uma().calc_score() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                ));
+            }
+            // 有些情况下（例如在达到 max_depth 的同一轮刚好走到终局），可能还未通过 next() 触发 finished。
+            // 用 turn>=max_turn 兜底判定终局，并确保 on_simulation_end 被触发，避免漏算最终奖励。
+            if sim_game.turn >= sim_game.max_turn() {
+                sim_game.on_simulation_end(&trainer_hw, rng)?;
+                return Ok((
+                    sim_game.uma().calc_score() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                ));
+            }
+
+            // 未终局：leaf eval（scoreMean）；PT 口径用“当前 pt_bias”近似对齐
+            let v = self.leaf_evaluator.evaluate(&self.rollout_evaluator, &sim_game);
+            let score_mean = v.score_mean;
+            let current_score = sim_game.uma().calc_score() as f64;
+            let current_pt_score = sim_game.uma().calc_score_with_pt_favor() as f64;
+            let pt_bias = current_pt_score - current_score;
+            Ok((score_mean, score_mean + pt_bias))
         }
+    }
+
+    fn simulate_many(
+        &self,
+        game: &OnsenGame,
+        action: &OnsenAction,
+        n: usize,
+        rng: &mut StdRng,
+        result: &mut ActionResult,
+        result_pt: &mut ActionResult,
+    ) -> Result<()> {
+        // 仅 nn leaf + max_depth>0 才走微批；否则保持旧行为
+        if self.config.max_depth > 0 && self.leaf_nn().is_some() && self.rollout_batch_size > 1 {
+            let nn = self.leaf_nn().expect("nn");
+            let mut pending_features: Vec<f32> = Vec::with_capacity(self.rollout_batch_size * 1121);
+            let mut pending_pt_bias: Vec<f64> = Vec::with_capacity(self.rollout_batch_size);
+
+            for _ in 0..n {
+                match self.simulate_until_terminal_or_leaf(game, action, rng)? {
+                    SimOutcome::Terminal { score, score_pt } => {
+                        result.add(score);
+                        result_pt.add(score_pt);
+                    }
+                    SimOutcome::Leaf { features, pt_bias } => {
+                        pending_features.extend_from_slice(&features);
+                        pending_pt_bias.push(pt_bias);
+                        if pending_pt_bias.len() >= self.rollout_batch_size {
+                            let leaf_n = pending_pt_bias.len();
+                            let values = nn.evaluate_features_batch(&pending_features, leaf_n)?;
+                            for (i, v) in values.into_iter().enumerate() {
+                                let score_mean = v.score_mean;
+                                result.add(score_mean);
+                                result_pt.add(score_mean + pending_pt_bias[i]);
+                            }
+                            pending_features.clear();
+                            pending_pt_bias.clear();
+                        }
+                    }
+                }
+            }
+
+            if !pending_pt_bias.is_empty() {
+                let leaf_n = pending_pt_bias.len();
+                let values = nn.evaluate_features_batch(&pending_features, leaf_n)?;
+                for (i, v) in values.into_iter().enumerate() {
+                    let score_mean = v.score_mean;
+                    result.add(score_mean);
+                    result_pt.add(score_mean + pending_pt_bias[i]);
+                }
+                pending_features.clear();
+                pending_pt_bias.clear();
+            }
+            Ok(())
+        } else {
+            for _ in 0..n {
+                if let Ok(score) = self.simulate(game, action, rng) {
+                    result.add(score.0);
+                    result_pt.add(score.1);
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn simulate_until_terminal_or_leaf(
+        &self,
+        game: &OnsenGame,
+        action: &OnsenAction,
+        rng: &mut StdRng,
+    ) -> Result<SimOutcome> {
+        // Dig/Upgrade 目前仍走完整模拟（未对齐 max_depth）；这里直接复用现有路径，视为 Terminal
+        if matches!(action, OnsenAction::Dig(_)) {
+            let (s, pt) = self.simulate_onsen_select(game, action, rng)?;
+            return Ok(SimOutcome::Terminal { score: s, score_pt: pt });
+        }
+        if matches!(action, OnsenAction::Upgrade(_)) {
+            let (s, pt) = self.simulate_dig_upgrade(game, action, rng)?;
+            return Ok(SimOutcome::Terminal { score: s, score_pt: pt });
+        }
+
+        // 克隆游戏状态
+        let mut sim_game = game.clone();
+        let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
+
+        // 执行初始动作
+        sim_game.apply_action(action, rng)?;
+
+        // max_depth==0：保持旧行为，rollout 跑到终局
+        if self.config.max_depth == 0 {
+            while sim_game.next() {
+                sim_game.run_stage(&trainer_hw, rng)?;
+            }
+            sim_game.on_simulation_end(&trainer_hw, rng)?;
+            return Ok(SimOutcome::Terminal {
+                score: sim_game.uma().calc_score() as f64,
+                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
+            });
+        }
+
+        // max_depth>0：按 turn 截断；未终局则返回 leaf features（不在这里做推理）
+        let start_turn = sim_game.turn;
+        let max_depth = self.config.max_depth as i32;
+        let mut finished = false;
+
+        loop {
+            if !sim_game.next() {
+                finished = true;
+                break;
+            }
+            sim_game.run_stage(&trainer_hw, rng)?;
+            if (sim_game.turn - start_turn) >= max_depth {
+                break;
+            }
+        }
+
+        if finished || sim_game.turn >= sim_game.max_turn() {
+            sim_game.on_simulation_end(&trainer_hw, rng)?;
+            return Ok(SimOutcome::Terminal {
+                score: sim_game.uma().calc_score() as f64,
+                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
+            });
+        }
+
+        let current_score = sim_game.uma().calc_score() as f64;
+        let current_pt_score = sim_game.uma().calc_score_with_pt_favor() as f64;
+        let pt_bias = current_pt_score - current_score;
+        let features = sim_game.extract_nn_features(None);
+
+        Ok(SimOutcome::Leaf { features, pt_bias })
     }
 
     /// 模拟选择温泉. 因为没有做成单独的阶段，所以单独处理
@@ -292,16 +630,21 @@ impl FlatSearch {
         sim_game.apply_action(action, rng)?;
         sim_game.pending_selection = false;
         // 去除pending_selection状态后就可以正常模拟了。
-        let trainer = SimulationTrainer { evaluator: &self.evaluator };
+        let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
         while sim_game.next() {
-            sim_game.run_stage(&trainer, rng)?;
+            sim_game.run_stage(&trainer_hw, rng)?;
         }
-        sim_game.on_simulation_end(&trainer, rng)?;
+        sim_game.on_simulation_end(&trainer_hw, rng)?;
         Ok((
             sim_game.uma().calc_score() as f64,
             sim_game.uma().calc_score_with_pt_favor() as f64
         ))
     }
+}
+
+enum SimOutcome {
+    Terminal { score: f64, score_pt: f64 },
+    Leaf { features: Vec<f32>, pt_bias: f64 },
 }
 
 /// 模拟用训练员
@@ -358,3 +701,5 @@ impl<'a> crate::game::Trainer<OnsenGame> for SimulationTrainer<'a> {
         Ok(best_idx)
     }
 }
+
+// 说明：E6 的“rollout 动作走 NN”已回退；rollout 全程固定使用 SimulationTrainer(HandwrittenEvaluator)。

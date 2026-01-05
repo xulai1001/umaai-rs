@@ -99,7 +99,7 @@ impl MctsTrainer {
     }
 
     pub fn format_action_result(
-        &self, action: &OnsenAction, result: &ActionResult, score: f64, best_score: f64
+        &self, action: &OnsenAction, _result: &ActionResult, score: f64, best_score: f64
     ) -> String {
         let text = format!("{action}: {score:.0}");
         let delta = best_score - score;
@@ -194,7 +194,7 @@ impl MctsTrainer {
         mean_weighted /= count as f64;
         let turn_score = sum / count as f64;
         let initial_score = self.initial_score.1.load(Ordering::SeqCst);
-        let last_score = self.last_score.1.load(Ordering::SeqCst);
+       // let last_score = self.last_score.1.load(Ordering::SeqCst);
         //let luck_overall = turn_score - initial_score as f64;
         //let luck_turn = turn_score - last_score as f64;
         //let weighted_bonus = mean_weighted - turn_score;

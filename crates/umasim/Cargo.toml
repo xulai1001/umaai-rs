@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "generate_training_data"
 path = "src/bin/generate_training_data.rs"
 
+[[bin]]
+name = "generate_mean_filtered_data"
+path = "src/bin/generate_mean_filtered_data.rs"
+
 [dependencies]
 anyhow.workspace = true
 bincode.workspace = true

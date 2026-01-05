@@ -1,13 +1,10 @@
 //! umaai-rs - Rewrite UmaAI in Rust
 //!
 //! author: curran
-use std::time::Instant;
 
-use anyhow::{Result, bail};
-use indicatif::{ProgressBar, ProgressStyle};
+use anyhow::Result;
 use log::info;
 use rand::{SeedableRng, rngs::StdRng};
-use rayon::prelude::*;
 use umasim::{
     game::{Game, InheritInfo, onsen::game::OnsenGame},
     gamedata::{GAMECONSTANTS, GameConfig, init_global},
@@ -52,57 +49,6 @@ fn run_onsen_once(
     Ok(SimulationResult { score, pt, explain })
 }
 
-/// 打印多次模拟的统计结果
-fn print_simulation_stats(results: &[SimulationResult], elapsed: std::time::Duration) {
-    if results.is_empty() {
-        return;
-    }
-
-    // 找到最高分和最低分
-    let (best_idx, best) = results.iter().enumerate().max_by_key(|(_, r)| r.score).unwrap();
-    let (worst_idx, worst) = results.iter().enumerate().min_by_key(|(_, r)| r.score).unwrap();
-
-    // 计算平均分
-    let avg_score = results.iter().map(|r| r.score as f64).sum::<f64>() / results.len() as f64;
-    let avg_pt = results.iter().map(|r| r.pt as f64).sum::<f64>() / results.len() as f64;
-
-    // 打印分隔线
-    println!("\n{}", "=".repeat(60));
-    println!("多次模拟统计 (共 {} 次)", results.len());
-    println!("{}", "=".repeat(60));
-
-    // 打印最高分结算面板
-    println!("\n【最高分】第 {} 次模拟:", best_idx + 1);
-    println!("{}", best.explain);
-    println!(
-        "评分: {} {}, PT: {}",
-        global!(GAMECONSTANTS).get_rank_name(best.score),
-        best.score,
-        best.pt
-    );
-
-    // 打印最低分结算面板
-    println!("\n【最低分】第 {} 次模拟:", worst_idx + 1);
-    println!("{}", worst.explain);
-    println!(
-        "评分: {} {}, PT: {}",
-        global!(GAMECONSTANTS).get_rank_name(worst.score),
-        worst.score,
-        worst.pt
-    );
-
-    // 打印统计摘要
-    println!("\n{}", "-".repeat(60));
-    println!(
-        "平均评分: {} {:.0}, 平均PT+Hint: {:.0}",
-        global!(GAMECONSTANTS).get_rank_name(avg_score as i32),
-        avg_score,
-        avg_pt
-    );
-    println!("总耗时: {:?}, 平均单次: {:?}", elapsed, elapsed / results.len() as u32);
-    println!("{}", "=".repeat(60));
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. 先读取配置文件
@@ -116,9 +62,9 @@ async fn main() -> Result<()> {
     init_global()?;
 
     //let simulation_count = game_config.simulation_count.max(1);
-    let simulation_count = 1;
+    //let simulation_count = 1;
     // 开始计时
-    let start = Instant::now();
+    //let start = Instant::now();
 
     let inherit = InheritInfo {
         blue_count: game_config.blue_count.clone(),
@@ -136,7 +82,7 @@ async fn main() -> Result<()> {
         .with_search_cpuct(game_config.mcts.search_cpuct)
         .with_expected_search_stdev(game_config.mcts.expected_search_stdev);
     info!("search_config = {search_config:?}");
-    let mut trainer_mcts = MctsTrainer::new(search_config).verbose(true);
+    let trainer_mcts = MctsTrainer::new(search_config).verbose(true);
 
     let sim_result = run_onsen_once(trainer_mcts, game_config.uma, &game_config.cards, inherit)?;
 

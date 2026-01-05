@@ -63,6 +63,7 @@ fn run_basic_once<T: Trainer<BasicGame>>(
 /// # 探索性策略
 /// 使用 40% 探索率在温泉选择时引入随机性，让神经网络能够
 /// 从不同的挖掘顺序中学习，而不是只记住固定的顺序。
+#[allow(dead_code)]
 fn run_collector_mode(config: &GameConfig, num_games: usize, rng: &mut StdRng) -> Result<()> {
     // 创建带探索率的训练员
     let trainer = CollectorTrainer::new(); // 默认 40% 探索率
@@ -333,9 +334,59 @@ async fn main() -> Result<()> {
                     // info!("search_config = {search_config:?}");
                     let mut trainer = MctsTrainer::new(search_config).verbose(true);
                     trainer.mcts_selection = game_config.mcts_selection.clone();
+
+                    // P3-MVP：leaf eval 评估器开关（用于 A/B 对照）
+                    match game_config.mcts.rollout_evaluator.as_str() {
+                        "handwritten" => {
+                            trainer.search = trainer.search.with_leaf_evaluator_handwritten();
+                        }
+                        "nn" => {
+                            if game_config.mcts.max_depth == 0 {
+                                println!(
+                                    "警告: mcts.rollout_evaluator=\"nn\" 但 mcts.max_depth=0，leaf eval 不会被使用（等价于旧路径）"
+                                );
+                            }
+                            if game_config.mcts_selection == "pt" && game_config.mcts.max_depth > 0 {
+                                return Err(anyhow::anyhow!(
+                                    "E4 验收约束：mcts.rollout_evaluator=\"nn\" 且 max_depth>0 时禁止 mcts_selection=\"pt\"；请改为 \"score\""
+                                ));
+                            }
+
+                            let model_path = game_config.neuralnet_model_path.as_str();
+                            if !std::path::Path::new(model_path).exists() {
+                                return Err(anyhow::anyhow!(
+                                    "mcts.rollout_evaluator=\"nn\" 但模型文件不存在: {model_path}"
+                                ));
+                            }
+                            // 先验证模型可加载（避免“以为开了 NN 实际没开”的伪对照）
+                            let _ = umasim::neural::NeuralNetEvaluator::load(model_path)?;
+                            trainer.search = trainer.search.with_leaf_evaluator_nn(model_path.to_string());
+                        }
+                        other => {
+                            return Err(anyhow::anyhow!(
+                                "未知 mcts.rollout_evaluator=\"{other}\"（仅支持 \"handwritten\" | \"nn\"）"
+                            ));
+                        }
+                    }
+
+                    // E4：leaf eval 微批大小（batch=1 等价于逐样本推理；batch>1 才会启用 infer_batch）
+                    trainer.search = trainer.search.with_rollout_batch_size(game_config.mcts.rollout_batch_size);
                     match game_config.scenario.as_str() {
                         "onsen" => {
-                            run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)
+                            let r = run_onsen_once(&trainer, game_config.uma, &game_config.cards, inherit.clone(), &mut rng)?;
+                            if game_config.mcts.rollout_evaluator == "nn" && game_config.mcts.max_depth > 0 {
+                                if let Some(s) = trainer.search.leaf_nn_stats() {
+                                    println!(
+                                        "[NN][leaf] stats: model_loads={}, infer_batches={}, infer_calls={}, infer_errors={}, infer_time_ms_total={:.2}",
+                                        s.model_loads,
+                                        s.infer_batches,
+                                        s.infer_calls,
+                                        s.infer_errors,
+                                        (s.infer_time_ns_total as f64) / 1_000_000.0
+                                    );
+                                }
+                            }
+                            Ok(r)
                         }
                         _ => {
                             println!("警告: MCTS 训练员仅支持 onsen 剧本，使用 random 训练员");

@@ -10,7 +10,7 @@ use log::{info, warn};
 pub use person::*;
 use rand::{rngs::StdRng, seq::IndexedRandom};
 
-use crate::{explain::Explain, game::*, gamedata::{EventData, FreeRaceData}, utils::*};
+use crate::{explain::Explain, game::*, gamedata::EventData, utils::*};
 
 /// 一局游戏的基本状态，剧本通用，用于计算，不用于通信(例如通信只传递卡组id)  
 /// 不包含人头信息(Person类型可能不同)，实际的剧本对象需要补上Vec<Person>才能实现Game Trait    

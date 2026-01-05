@@ -10,10 +10,7 @@
 //! 3. 羁绊价值提升 - 前期更重视羁绊
 
 use anyhow::Result;
-use log::info;
-use colored::Colorize;
 use rand::{rngs::StdRng, seq::IndexedRandom};
-use serde::Serialize;
 
 use super::{Evaluator, ValueOutput};
 use crate::{

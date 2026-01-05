@@ -103,6 +103,13 @@ impl OnsenGame {
         Ok(lines.join("\n"))
     }
 
+    /// 显示本回合人头分布（给 umaai 调试/日志使用）
+    ///
+    /// 注意：底层实现来自 `Game` trait 的 `explain_distribution()`。
+    pub fn explain_distribution(&self) -> Result<String> {
+        <Self as crate::game::Game>::explain_distribution(self)
+    }
+
     pub fn add_person(&mut self, mut person: BasePerson) {
         info!("新人物: {:?} - {}", person.person_type, person.explain());
         person.person_index = self.persons.len() as i32;
@@ -1780,7 +1787,7 @@ impl Game for OnsenGame {
         }
     }
 
-    fn on_simulation_end<T: Trainer<Self>>(&mut self, trainer: &T, rng: &mut StdRng) -> Result<()> {
+    fn on_simulation_end<T: Trainer<Self>>(&mut self, _trainer: &T, _rng: &mut StdRng) -> Result<()> {
         info!(">> 育成结束，触发最终奖励事件");
         /*
         // 查找回合78事件 (ぴょいや！大宴会！)
