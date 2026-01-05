@@ -16,11 +16,14 @@
 //!   --threads 24
 //! ```
 
-use std::{path::{Path, PathBuf}, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant
+};
 
 use anyhow::{Context, Result, anyhow};
-use clap::Parser;
 use chrono::Local;
+use clap::Parser;
 use rand::{SeedableRng, rngs::StdRng};
 use umasim::{
     collector::{
@@ -31,13 +34,13 @@ use umasim::{
         compute_file_signature,
         compute_text_hash_fnv1a64,
         load_score_mean_values,
-        try_get_git_commit,
+        try_get_git_commit
     },
     game::{Game, InheritInfo, onsen::game::OnsenGame},
     gamedata::{GameConfig, init_global},
     search::{FlatSearch, SearchConfig},
     trainer::MeanFilterCollectorTrainer,
-    utils::init_logger,
+    utils::init_logger
 };
 
 #[derive(Parser, Debug)]
@@ -130,7 +133,7 @@ struct Args {
 
     /// 是否输出更详细的调试信息
     #[arg(long)]
-    verbose: bool,
+    verbose: bool
 }
 
 fn clamp_turn_range(turn_min: i32, turn_max: i32) -> (i32, i32) {
@@ -158,7 +161,7 @@ fn append_suffix_to_last_component(dir: &Path, suffix: &str) -> PathBuf {
     let new_name = format!("{file_name}_{suffix}");
     match dir.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.join(new_name),
-        _ => PathBuf::from(new_name),
+        _ => PathBuf::from(new_name)
     }
 }
 
@@ -166,7 +169,10 @@ fn make_unique_dir(dir: PathBuf) -> PathBuf {
     if !dir.exists() {
         return dir;
     }
-    let parent = dir.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+    let parent = dir
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
     let base_name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("run").to_string();
     for i in 1..1000 {
         let candidate = parent.join(format!("{base_name}_{i:02}"));
@@ -178,10 +184,7 @@ fn make_unique_dir(dir: PathBuf) -> PathBuf {
     dir
 }
 
-fn build_effective_search_config(
-    game_config: &GameConfig,
-    search_n_cli: Option<usize>,
-) -> SearchConfig {
+fn build_effective_search_config(game_config: &GameConfig, search_n_cli: Option<usize>) -> SearchConfig {
     // 先从 mcts 段构造（兼容已有配置）
     let mut cfg = SearchConfig::new_game_config(game_config);
 
@@ -236,10 +239,10 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 读取配置文件
-    let config_file_text = fs_err::read_to_string(&args.config)
-        .with_context(|| format!("读取配置文件失败: {}", args.config))?;
-    let mut game_config: GameConfig = toml::from_str(&config_file_text)
-        .with_context(|| format!("解析配置文件失败: {}", args.config))?;
+    let config_file_text =
+        fs_err::read_to_string(&args.config).with_context(|| format!("读取配置文件失败: {}", args.config))?;
+    let mut game_config: GameConfig =
+        toml::from_str(&config_file_text).with_context(|| format!("解析配置文件失败: {}", args.config))?;
 
     // 允许 CLI 覆盖 collector 段（只影响本次运行，且会写入 manifest 的 effective config）
     if let Some(v) = &args.output_dir {
@@ -373,7 +376,8 @@ fn main() -> Result<()> {
     let repo_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     // 若 resume 且已有 manifest：禁止与当前配置 hash 不一致（防止混入不同配置的数据）
-    if output_dir.exists() && game_config.collector.resume && !game_config.collector.overwrite && manifest_path.exists() {
+    if output_dir.exists() && game_config.collector.resume && !game_config.collector.overwrite && manifest_path.exists()
+    {
         let old = CollectorManifest::load(&manifest_path)?;
         if old.config_hash_fnv1a64 != config_hash {
             return Err(anyhow!(
@@ -392,11 +396,13 @@ fn main() -> Result<()> {
         "gamedata/constants.json",
         "gamedata/events.json",
         "gamedata/umaDB.json",
-        "gamedata/cardDB.json",
+        "gamedata/cardDB.json"
     ] {
         let path = Path::new(p);
         if path.exists() {
-            let hash = fs_err::metadata(path).map(|m| m.len() <= 32 * 1024 * 1024).unwrap_or(false);
+            let hash = fs_err::metadata(path)
+                .map(|m| m.len() <= 32 * 1024 * 1024)
+                .unwrap_or(false);
             gamedata_sig.push(compute_file_signature(path, hash)?);
         }
     }
@@ -415,8 +421,14 @@ fn main() -> Result<()> {
     println!("output_dir_effective  : {}", output_dir.display());
     println!("output_dir_base       : {}", game_config.collector.output_dir);
     println!("output_name           : {}", game_config.collector.output_name);
-    println!("output_append_timestamp: {}", game_config.collector.output_append_timestamp);
-    println!("output_timestamp_format: {}", game_config.collector.output_timestamp_format);
+    println!(
+        "output_append_timestamp: {}",
+        game_config.collector.output_append_timestamp
+    );
+    println!(
+        "output_timestamp_format: {}",
+        game_config.collector.output_timestamp_format
+    );
     println!("target_samples        : {}", game_config.collector.target_samples);
     println!("max_games             : {}", game_config.collector.max_games);
     println!("score_mean_threshold  : {}", game_config.collector.score_mean_threshold);
@@ -426,10 +438,7 @@ fn main() -> Result<()> {
         "choice_rollouts       : {}",
         game_config.collector.choice_rollouts_per_option
     );
-    println!(
-        "choice_policy_delta   : {}",
-        game_config.collector.choice_policy_delta
-    );
+    println!("choice_policy_delta   : {}", game_config.collector.choice_policy_delta);
     println!(
         "choice_threshold      : {:?} (effective={})",
         game_config.collector.choice_score_mean_threshold,
@@ -453,13 +462,14 @@ fn main() -> Result<()> {
     println!("fast_after_target     : {}", game_config.collector.fast_after_target);
     println!(
         "turn_range            : {}..={} stride={}",
-        game_config.collector.turn_min,
-        game_config.collector.turn_max,
-        game_config.collector.turn_stride
+        game_config.collector.turn_min, game_config.collector.turn_max, game_config.collector.turn_stride
     );
     println!("threads               : {}", game_config.collector.threads);
     println!("shard_size            : {}", game_config.collector.shard_size);
-    println!("resume/overwrite      : {}/{}", game_config.collector.resume, game_config.collector.overwrite);
+    println!(
+        "resume/overwrite      : {}/{}",
+        game_config.collector.resume, game_config.collector.overwrite
+    );
     println!("search_n              : {}", search_config.search_n);
     println!("ucb                   : {}", search_config.use_ucb);
     println!("search_group_size     : {}", search_config.search_group_size);
@@ -487,9 +497,9 @@ fn main() -> Result<()> {
                 gamedata_sig,
                 model_sig,
                 game_config.collector.clone(),
-                &search_config,
+                &search_config
             ))
-        },
+        }
     )?;
 
     // 若目录里已有 part 且本次有效配置（尤其 threshold/search_n/turn_range）不一致，直接拒绝继续
@@ -535,7 +545,7 @@ fn main() -> Result<()> {
     // RNG（仅尽量控制游戏本体随机性）
     let mut rng = match args.seed {
         Some(seed) => StdRng::seed_from_u64(seed),
-        None => StdRng::from_os_rng(),
+        None => StdRng::from_os_rng()
     };
 
     // 组装 trainer（P2：action + choice，精确到 target_samples）
@@ -573,7 +583,7 @@ fn main() -> Result<()> {
         // 创建新局
         let inherit = InheritInfo {
             blue_count: game_config.blue_count.clone(),
-            extra_count: game_config.extra_count.clone(),
+            extra_count: game_config.extra_count.clone()
         };
         let mut game = match OnsenGame::newgame(game_config.uma, &game_config.cards, inherit) {
             Ok(g) => g,
@@ -605,12 +615,15 @@ fn main() -> Result<()> {
                 writer.manifest.progress.dropped = base_progress.dropped + stats.dropped;
                 writer.manifest.progress.dropped_zero_mean = base_progress.dropped_zero_mean + stats.dropped_zero_mean;
                 writer.manifest.progress.search_errors = base_progress.search_errors + stats.search_errors;
-                writer.manifest.progress.policy_sum_not_one = base_progress.policy_sum_not_one + stats.policy_sum_not_one;
+                writer.manifest.progress.policy_sum_not_one =
+                    base_progress.policy_sum_not_one + stats.policy_sum_not_one;
                 writer.manifest.progress.choice_candidates = base_progress.choice_candidates + stats.choice_candidates;
                 writer.manifest.progress.choice_accepted = base_progress.choice_accepted + stats.choice_accepted;
                 writer.manifest.progress.choice_dropped = base_progress.choice_dropped + stats.choice_dropped;
-                writer.manifest.progress.choice_sum_not_one = base_progress.choice_sum_not_one + stats.choice_sum_not_one;
-                writer.manifest.progress.choice_policy_not_zero = base_progress.choice_policy_not_zero + stats.choice_policy_not_zero;
+                writer.manifest.progress.choice_sum_not_one =
+                    base_progress.choice_sum_not_one + stats.choice_sum_not_one;
+                writer.manifest.progress.choice_policy_not_zero =
+                    base_progress.choice_policy_not_zero + stats.choice_policy_not_zero;
                 writer.manifest.progress.choice_skipped_too_many_options =
                     base_progress.choice_skipped_too_many_options + stats.choice_skipped_too_many_options;
                 writer.manifest.progress.choice_skipped_chance_event =
@@ -632,10 +645,14 @@ fn main() -> Result<()> {
                 // 进度输出
                 let total_games_run = writer.manifest.progress.games_run;
                 if total_games_run % game_config.collector.progress_interval as u64 == 0 {
-            let elapsed = start.elapsed().as_secs_f64();
+                    let elapsed = start.elapsed().as_secs_f64();
                     let accepted_total = stats.accepted;
                     let accepted_new_total = accepted_total.saturating_sub(accepted_base);
-                    let accepted_per_s = if elapsed > 0.0 { accepted_new_total as f64 / elapsed } else { 0.0 };
+                    let accepted_per_s = if elapsed > 0.0 {
+                        accepted_new_total as f64 / elapsed
+                    } else {
+                        0.0
+                    };
 
                     let action_candidates = stats.candidates;
                     let action_accepted_new = stats.action_accepted;
@@ -649,10 +666,10 @@ fn main() -> Result<()> {
                     let choice_accepted_new = stats.choice_accepted;
                     let choice_accept_rate = if choice_candidates > 0 {
                         choice_accepted_new as f64 / choice_candidates as f64
-            } else {
-                0.0
-            };
-            println!(
+                    } else {
+                        0.0
+                    };
+                    println!(
                         "[games={}] accepted_total={} (+{}) action:+{}/{} ({:.2}%) choice:+{}/{} ({:.2}%) dropped={} choice_dropped={} accepted/s={:.2} search_errors={} elapsed={:.1}s",
                         total_games_run,
                         accepted_total,
@@ -663,17 +680,17 @@ fn main() -> Result<()> {
                         choice_accepted_new,
                         choice_candidates,
                         choice_accept_rate * 100.0,
-                stats.dropped,
+                        stats.dropped,
                         stats.choice_dropped,
-                accepted_per_s,
-                stats.search_errors,
-                elapsed,
+                        accepted_per_s,
+                        stats.search_errors,
+                        elapsed,
                     );
                 }
 
                 // 每局写一次 manifest，尽量减少“part 写完但 manifest 未更新”的窗口
                 writer.save_manifest()?;
-        }
+            }
             Err(e) => {
                 games_failed_delta += 1;
                 // 丢弃本局缓冲（避免把异常局的半局数据混入）

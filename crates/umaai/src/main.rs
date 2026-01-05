@@ -103,9 +103,7 @@ async fn main_guard() -> Result<()> {
 
             let model_path = game_config.neuralnet_model_path.as_str();
             if !Path::new(model_path).exists() {
-                return Err(anyhow!(
-                    "mcts.rollout_evaluator=\"nn\" 但模型文件不存在: {model_path}"
-                ));
+                return Err(anyhow!("mcts.rollout_evaluator=\"nn\" 但模型文件不存在: {model_path}"));
             }
             // 先验证模型可加载（避免“以为开了 NN 实际没开”的伪对照）
             let _ = NeuralNetEvaluator::load(model_path)?;
@@ -119,7 +117,9 @@ async fn main_guard() -> Result<()> {
     }
 
     // E4：leaf eval 微批大小（batch=1 等价于逐样本推理；batch>1 才会启用 infer_batch）
-    trainer.search = trainer.search.with_rollout_batch_size(game_config.mcts.rollout_batch_size);
+    trainer.search = trainer
+        .search
+        .with_rollout_batch_size(game_config.mcts.rollout_batch_size);
 
     // 开始检测文件
     let mut watcher = UraFileWatcher::init()?;
@@ -220,10 +220,7 @@ mod tests {
     use colored::Colorize;
     use log::info;
     use notify::{Event, RecursiveMode, Watcher};
-    use umasim::{
-        gamedata::init_global,
-        utils::init_logger
-    };
+    use umasim::{gamedata::init_global, utils::init_logger};
 
     use crate::protocol::{
         GameStatusOnsen,

@@ -166,7 +166,7 @@ impl MctsTrainer {
                     best_score - turn_score
                 ));
                 //if action == &OnsenAction::Race {
-                 //   race_loss = best_score - (result.0.mean() + mcts_bonus as f64);
+                //   race_loss = best_score - (result.0.mean() + mcts_bonus as f64);
                 //}
             }
             info!("[回合 {} 重视评分] {}", game.turn + 1, line.join(" "));
@@ -194,7 +194,7 @@ impl MctsTrainer {
         mean_weighted /= count as f64;
         let turn_score = sum / count as f64;
         let initial_score = self.initial_score.1.load(Ordering::SeqCst);
-       // let last_score = self.last_score.1.load(Ordering::SeqCst);
+        // let last_score = self.last_score.1.load(Ordering::SeqCst);
         //let luck_overall = turn_score - initial_score as f64;
         //let luck_turn = turn_score - last_score as f64;
         //let weighted_bonus = mean_weighted - turn_score;
@@ -294,7 +294,7 @@ impl Trainer<OnsenGame> for MctsTrainer {
         // 使用 MCTS 搜索
         let search_output = self.search.search(game, actions, rng)?;
         global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
-        
+
         let best_action = search_output.best_action();
         let best_action_2 = search_output.best_action_2();
         let selection = match self.mcts_selection.as_str() {

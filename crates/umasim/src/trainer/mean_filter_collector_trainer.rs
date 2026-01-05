@@ -17,13 +17,13 @@ use crate::{
     game::{
         Game,
         Trainer,
-        onsen::{action::OnsenAction, game::OnsenGame},
+        onsen::{action::OnsenAction, game::OnsenGame}
     },
     gamedata::{ActionValue, EventData},
     neural::{Evaluator, HandwrittenEvaluator},
     search::FlatSearch,
     trainer::HandwrittenTrainer,
-    training_sample::{CHOICE_DIM, POLICY_DIM, TrainingSample},
+    training_sample::{CHOICE_DIM, POLICY_DIM, TrainingSample}
 };
 
 #[derive(Debug, Clone)]
@@ -60,7 +60,7 @@ pub struct MeanFilterCollectorStats {
     /// per-turn choice（长度 78；idx = human_turn - 1）
     pub turn_choice_candidates: Vec<u64>,
     pub turn_choice_accepted: Vec<u64>,
-    pub turn_choice_dropped: Vec<u64>,
+    pub turn_choice_dropped: Vec<u64>
 }
 
 impl MeanFilterCollectorStats {
@@ -88,7 +88,7 @@ impl MeanFilterCollectorStats {
             turn_dropped: vec![0; 78],
             turn_choice_candidates: vec![0; 78],
             turn_choice_accepted: vec![0; 78],
-            turn_choice_dropped: vec![0; 78],
+            turn_choice_dropped: vec![0; 78]
         }
     }
 
@@ -104,11 +104,11 @@ impl MeanFilterCollectorStats {
         self.accepted_score_mean_sum += score_mean;
         self.accepted_score_mean_min = Some(match self.accepted_score_mean_min {
             Some(v) => v.min(score_mean),
-            None => score_mean,
+            None => score_mean
         });
         self.accepted_score_mean_max = Some(match self.accepted_score_mean_max {
             Some(v) => v.max(score_mean),
-            None => score_mean,
+            None => score_mean
         });
     }
 }
@@ -125,7 +125,7 @@ struct ChoiceEvalResult {
     num: u32,
     sum: f64,
     sum_sq: f64,
-    scores: Vec<f64>,
+    scores: Vec<f64>
 }
 
 impl ChoiceEvalResult {
@@ -173,7 +173,11 @@ impl ChoiceEvalResult {
             weight_total += weight;
         }
 
-        if weight_total > 0.0 { weighted_sum / weight_total } else { self.mean() }
+        if weight_total > 0.0 {
+            weighted_sum / weight_total
+        } else {
+            self.mean()
+        }
     }
 }
 
@@ -213,7 +217,7 @@ pub struct MeanFilterCollectorTrainer {
     samples: RefCell<Vec<TrainingSample>>,
     stats: RefCell<MeanFilterCollectorStats>,
 
-    verbose: bool,
+    verbose: bool
 }
 
 impl MeanFilterCollectorTrainer {
@@ -237,7 +241,7 @@ impl MeanFilterCollectorTrainer {
             turn_stride: 1,
             samples: RefCell::new(Vec::new()),
             stats: RefCell::new(MeanFilterCollectorStats::new()),
-            verbose: false,
+            verbose: false
         }
     }
 
@@ -357,13 +361,12 @@ impl MeanFilterCollectorTrainer {
         let selected_action = self.evaluator.select_action(game, rng);
         match &selected_action {
             Some(action) => actions.iter().position(|a| *a == action.selection).unwrap_or(0),
-            None => 0,
+            None => 0
         }
     }
 
     fn effective_choice_score_mean_threshold(&self) -> f64 {
-        self.choice_score_mean_threshold
-            .unwrap_or(self.score_mean_threshold)
+        self.choice_score_mean_threshold.unwrap_or(self.score_mean_threshold)
     }
 
     fn compute_radical_factor(&self, turn: i32) -> f64 {
@@ -377,11 +380,7 @@ impl MeanFilterCollectorTrainer {
     }
 
     fn eval_decision_event_choices_crn(
-        &self,
-        game: &OnsenGame,
-        event: &EventData,
-        num_choices: usize,
-        rng: &StdRng,
+        &self, game: &OnsenGame, event: &EventData, num_choices: usize, rng: &StdRng
     ) -> (Vec<f64>, usize, f64, ChoiceEvalResult) {
         // A. 降低 label 噪声：CRN（Common Random Numbers）
         // - 同一个 decision event 内：所有 choice 共享同一组 rollout_seeds（减少差分噪声）
@@ -410,11 +409,7 @@ impl MeanFilterCollectorTrainer {
     }
 
     fn eval_choice_result_with_seeds(
-        &self,
-        game: &OnsenGame,
-        event: &EventData,
-        choice_idx: usize,
-        rollout_seeds: &[u64],
+        &self, game: &OnsenGame, event: &EventData, choice_idx: usize, rollout_seeds: &[u64]
     ) -> ChoiceEvalResult {
         let mut result = ChoiceEvalResult::default();
         let sim_trainer = HandwrittenTrainer::new();
@@ -540,9 +535,7 @@ impl Trainer<OnsenGame> for MeanFilterCollectorTrainer {
                     stats.policy_sum_not_one += 1;
                 }
                 if self.verbose && (policy_sum - 1.0).abs() > 1e-3 {
-                    debug!(
-                        "[回合 {human_turn}] policy_sum 异常：{policy_sum:.6}（可能是 action index 覆盖/越界）"
-                    );
+                    debug!("[回合 {human_turn}] policy_sum 异常：{policy_sum:.6}（可能是 action index 覆盖/越界）");
                 }
                 self.samples.borrow_mut().push(sample);
                 let mut stats = self.stats.borrow_mut();
@@ -560,11 +553,7 @@ impl Trainer<OnsenGame> for MeanFilterCollectorTrainer {
     }
 
     fn select_event_choice(
-        &self,
-        game: &OnsenGame,
-        event: &EventData,
-        choices: &[ActionValue],
-        rng: &mut StdRng,
+        &self, game: &OnsenGame, event: &EventData, choices: &[ActionValue], rng: &mut StdRng
     ) -> Result<usize> {
         if choices.is_empty() {
             return Ok(0);
@@ -607,7 +596,10 @@ impl Trainer<OnsenGame> for MeanFilterCollectorTrainer {
                 Ok(weights) => Ok(weights.sample(rng)),
                 Err(e) => {
                     if self.verbose {
-                        debug!("[回合 {human_turn}] 事件#{} {} random_choice_prob 非法（{}），回退为均匀随机", event.id, event.name, e);
+                        debug!(
+                            "[回合 {human_turn}] 事件#{} {} random_choice_prob 非法（{}），回退为均匀随机",
+                            event.id, event.name, e
+                        );
                     }
                     Ok(rng.random_range(0..choices.len()))
                 }

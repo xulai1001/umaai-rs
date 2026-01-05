@@ -24,28 +24,28 @@ use crate::{
         HandwrittenEvaluator,
         ThreadLocalNeuralNetLeafEvaluator,
         ThreadLocalNeuralNetLeafStatsSnapshot,
-        ValueOutput,
+        ValueOutput
     }
 };
 
 #[derive(Clone)]
 enum LeafEvaluator {
     Handwritten,
-    NeuralNet(ThreadLocalNeuralNetLeafEvaluator),
+    NeuralNet(ThreadLocalNeuralNetLeafEvaluator)
 }
 
 impl LeafEvaluator {
     fn name(&self) -> &'static str {
         match self {
             LeafEvaluator::Handwritten => "handwritten",
-            LeafEvaluator::NeuralNet(_) => "nn",
+            LeafEvaluator::NeuralNet(_) => "nn"
         }
     }
 
     fn evaluate(&self, rollout_evaluator: &HandwrittenEvaluator, game: &OnsenGame) -> ValueOutput {
         match self {
             LeafEvaluator::Handwritten => rollout_evaluator.evaluate(game),
-            LeafEvaluator::NeuralNet(nn) => nn.evaluate(game),
+            LeafEvaluator::NeuralNet(nn) => nn.evaluate(game)
         }
     }
 }
@@ -65,7 +65,7 @@ pub struct FlatSearch {
     config: SearchConfig,
 
     /// E4：leaf eval 微批大小（仅在 max_depth>0 && leaf_eval=nn 时生效）
-    rollout_batch_size: usize,
+    rollout_batch_size: usize
 }
 
 impl FlatSearch {
@@ -75,7 +75,7 @@ impl FlatSearch {
             rollout_evaluator: HandwrittenEvaluator::new(),
             leaf_evaluator: LeafEvaluator::Handwritten,
             config,
-            rollout_batch_size: 1,
+            rollout_batch_size: 1
         }
     }
 
@@ -111,7 +111,7 @@ impl FlatSearch {
     pub fn leaf_nn_stats(&self) -> Option<ThreadLocalNeuralNetLeafStatsSnapshot> {
         match &self.leaf_evaluator {
             LeafEvaluator::NeuralNet(nn) => Some(nn.stats()),
-            _ => None,
+            _ => None
         }
     }
 
@@ -123,7 +123,7 @@ impl FlatSearch {
     fn leaf_nn(&self) -> Option<&ThreadLocalNeuralNetLeafEvaluator> {
         match &self.leaf_evaluator {
             LeafEvaluator::NeuralNet(nn) => Some(nn),
-            _ => None,
+            _ => None
         }
     }
 
@@ -192,7 +192,14 @@ impl FlatSearch {
                     let mut result_pt = ActionResult::new();
                     // 每个线程初始化一次 RNG
                     let mut thread_rng = StdRng::from_os_rng();
-                    let _ = self.simulate_many(game, action, self.config.search_n, &mut thread_rng, &mut result, &mut result_pt);
+                    let _ = self.simulate_many(
+                        game,
+                        action,
+                        self.config.search_n,
+                        &mut thread_rng,
+                        &mut result,
+                        &mut result_pt
+                    );
                     (result, result_pt)
                 })
                 .collect();
@@ -204,7 +211,14 @@ impl FlatSearch {
                     let mut result = ActionResult::new();
                     let mut result_pt = ActionResult::new();
                     let mut thread_rng = StdRng::from_os_rng();
-                    let _ = self.simulate_many(game, action, self.config.search_n, &mut thread_rng, &mut result, &mut result_pt);
+                    let _ = self.simulate_many(
+                        game,
+                        action,
+                        self.config.search_n,
+                        &mut thread_rng,
+                        &mut result,
+                        &mut result_pt
+                    );
                     (result, result_pt)
                 })
                 .collect();
@@ -280,7 +294,10 @@ impl FlatSearch {
                     (0..group_size)
                         .into_par_iter()
                         // E4.3-7)：每个 worker 只初始化一次 RNG，避免 tight loop 里反复 from_os_rng()
-                        .map_init(|| StdRng::from_os_rng(), |rng, _| self.simulate_until_terminal_or_leaf(game, action, rng).ok())
+                        .map_init(
+                            || StdRng::from_os_rng(),
+                            |rng, _| self.simulate_until_terminal_or_leaf(game, action, rng).ok()
+                        )
                         .filter_map(|x| x)
                         .collect()
                 } else {
@@ -335,28 +352,28 @@ impl FlatSearch {
                     }
                 }
             } else {
-            let scores: Vec<_> = if use_parallel {
-                (0..group_size)
-                    .into_par_iter()
+                let scores: Vec<_> = if use_parallel {
+                    (0..group_size)
+                        .into_par_iter()
                         // E4.3-7)：每个 worker 只初始化一次 RNG，避免 tight loop 里反复 from_os_rng()
                         .map_init(|| StdRng::from_os_rng(), |rng, _| self.simulate(game, action, rng).ok())
                         .filter_map(|x| x)
-                    .collect()
-            } else {
+                        .collect()
+                } else {
                     // 单线程分支：复用同一个 RNG，避免每次 rollout 都 from_os_rng() 的高开销
-                let mut out = Vec::with_capacity(group_size);
+                    let mut out = Vec::with_capacity(group_size);
                     let mut thread_rng = StdRng::from_os_rng();
                     for _ in 0..group_size {
-                    if let Ok(v) = self.simulate(game, action, &mut thread_rng) {
-                        out.push(v);
+                        if let Ok(v) = self.simulate(game, action, &mut thread_rng) {
+                            out.push(v);
+                        }
                     }
-                }
-                out
-            };
+                    out
+                };
 
-            for score in scores {
-                action_results[best_action_idx].0.add(score.0);
-                action_results[best_action_idx].1.add(score.1);
+                for score in scores {
+                    action_results[best_action_idx].0.add(score.0);
+                    action_results[best_action_idx].1.add(score.1);
                 }
             }
 
@@ -418,7 +435,9 @@ impl FlatSearch {
         } else {
             // 克隆游戏状态
             let mut sim_game = game.clone();
-            let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
+            let trainer_hw = SimulationTrainer {
+                evaluator: &self.rollout_evaluator
+            };
 
             // 执行初始动作
             sim_game.apply_action(action, rng)?;
@@ -431,7 +450,7 @@ impl FlatSearch {
                 sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
-                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64
                 ));
             }
 
@@ -455,7 +474,7 @@ impl FlatSearch {
                 sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
-                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64
                 ));
             }
             // 有些情况下（例如在达到 max_depth 的同一轮刚好走到终局），可能还未通过 next() 触发 finished。
@@ -464,7 +483,7 @@ impl FlatSearch {
                 sim_game.on_simulation_end(&trainer_hw, rng)?;
                 return Ok((
                     sim_game.uma().calc_score() as f64,
-                    sim_game.uma().calc_score_with_pt_favor() as f64,
+                    sim_game.uma().calc_score_with_pt_favor() as f64
                 ));
             }
 
@@ -479,13 +498,8 @@ impl FlatSearch {
     }
 
     fn simulate_many(
-        &self,
-        game: &OnsenGame,
-        action: &OnsenAction,
-        n: usize,
-        rng: &mut StdRng,
-        result: &mut ActionResult,
-        result_pt: &mut ActionResult,
+        &self, game: &OnsenGame, action: &OnsenAction, n: usize, rng: &mut StdRng, result: &mut ActionResult,
+        result_pt: &mut ActionResult
     ) -> Result<()> {
         // 仅 nn leaf + max_depth>0 才走微批；否则保持旧行为
         if self.config.max_depth > 0 && self.leaf_nn().is_some() && self.rollout_batch_size > 1 {
@@ -541,10 +555,7 @@ impl FlatSearch {
     }
 
     fn simulate_until_terminal_or_leaf(
-        &self,
-        game: &OnsenGame,
-        action: &OnsenAction,
-        rng: &mut StdRng,
+        &self, game: &OnsenGame, action: &OnsenAction, rng: &mut StdRng
     ) -> Result<SimOutcome> {
         // Dig/Upgrade 目前仍走完整模拟（未对齐 max_depth）；这里直接复用现有路径，视为 Terminal
         if matches!(action, OnsenAction::Dig(_)) {
@@ -558,7 +569,9 @@ impl FlatSearch {
 
         // 克隆游戏状态
         let mut sim_game = game.clone();
-        let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
+        let trainer_hw = SimulationTrainer {
+            evaluator: &self.rollout_evaluator
+        };
 
         // 执行初始动作
         sim_game.apply_action(action, rng)?;
@@ -571,7 +584,7 @@ impl FlatSearch {
             sim_game.on_simulation_end(&trainer_hw, rng)?;
             return Ok(SimOutcome::Terminal {
                 score: sim_game.uma().calc_score() as f64,
-                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
+                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64
             });
         }
 
@@ -595,7 +608,7 @@ impl FlatSearch {
             sim_game.on_simulation_end(&trainer_hw, rng)?;
             return Ok(SimOutcome::Terminal {
                 score: sim_game.uma().calc_score() as f64,
-                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64,
+                score_pt: sim_game.uma().calc_score_with_pt_favor() as f64
             });
         }
 
@@ -630,7 +643,9 @@ impl FlatSearch {
         sim_game.apply_action(action, rng)?;
         sim_game.pending_selection = false;
         // 去除pending_selection状态后就可以正常模拟了。
-        let trainer_hw = SimulationTrainer { evaluator: &self.rollout_evaluator };
+        let trainer_hw = SimulationTrainer {
+            evaluator: &self.rollout_evaluator
+        };
         while sim_game.next() {
             sim_game.run_stage(&trainer_hw, rng)?;
         }
@@ -644,7 +659,7 @@ impl FlatSearch {
 
 enum SimOutcome {
     Terminal { score: f64, score_pt: f64 },
-    Leaf { features: Vec<f32>, pt_bias: f64 },
+    Leaf { features: Vec<f32>, pt_bias: f64 }
 }
 
 /// 模拟用训练员

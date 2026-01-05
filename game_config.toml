@@ -15,9 +15,9 @@ extra_count = [10, 0, 0, 20, 20, 50]
 # 传说秘泉(9) - 比赛+80%（⭐特殊：第三年9月强制选择）
 onsen_order = [
     1, 3, 2,    # 第一年
-    6, 5, 2,   # 第二年
+    7, 5, 2,   # 第二年
     8, 9,       # 第三年
-    4, 7     # 递补用
+    4, 6     # 递补用
 ]
 
 # 温泉选择是否允许蒙特卡洛自由发挥（为false时，严格按照上面的优先顺序选择）
@@ -26,32 +26,15 @@ mcts_selected_onsen = true
 # 蒙特卡洛优先选择评分("score")还是PT("pt")
 mcts_selection = "score"
 
-<<<<<<< HEAD
-# 蒙特卡洛配置（仅当 trainer = "mcts" 时生效）
-#   search_n              - 搜索次数，每个动作模拟次数（默认10240，太慢的话可选2048,4096）
-#   radical_factor_max    - 激进度上限，越高越倾向可能有隐藏高回报的“表面昏招”（默认2）
-mcts = { search_n = 10240, radical_factor_max = 1.5 }
-
 # 日志级别: "debug" (完整显示) | "off" (全部关闭) | "info" (简要显示) | "trace" (详细显示) 
 log_level = "info"
-=======
-# 日志级别: "debug" (完整显示) | "off" (全部关闭) | "info" (简要显示) | "trace" (详细显示)
-log_level = "off"
->>>>>>> a5dc246b84bc90c7ef5f2b911de859e29e85900d
 
 # ---- 以下参数仅模拟中生效 ----
 # 模拟次数（默认1次，大于1时显示最高分/最低分面板和平均分）
-simulation_count = 10
-
-<<<<<<< HEAD
 simulation_count = 1
 
 # 马娘ID 参考umaDB.json
 uma = 106301
-=======
-# 马娘ID 参考umaDB.json 大头 102303  大脚 106301 贵妇人 111601 大狗叫 113101 狂怒乐章 107901 成天路 107702 米欲 103003 真弓快车 108702
-uma = 102303
->>>>>>> a5dc246b84bc90c7ef5f2b911de859e29e85900d
 
 # 卡组(ID, 突破等级, 参考gamedata/cardDB.json)
 # 温泉剧本需要包含友人卡 (chara_id = 9050)
@@ -65,7 +48,7 @@ cards = [302834, 302824, 302754, 302744, 302644, 302764]
 #cards = [302654, 302824, 302754, 302744, 302794, 302764]
 
 # 种马蓝因子个数 [速度, 耐力, 力量, 根性, 智力]
-blue_count = [12, 0, 6, 0, 0]
+blue_count = [12, 0, 0, 0, 6]
 
 # ---- 以下参数勿动 ----
 scenario = "onsen"
@@ -85,15 +68,15 @@ neuralnet_model_path = "saved_models/onsen_v18/model.onnx"
 # 蒙特卡洛配置（仅当 trainer = "mcts" 时生效）
 [mcts]
 # 每个动作的搜索次数（默认 10240；太慢可选 256/512/1024/2048）
-search_n = 256
+search_n = 10240
 # UCB 每组搜索次数（建议 <= search_n；越小越快但更噪）
-search_group_size = 32
+search_group_size = 256
 
 # 最大搜索深度（0=搜到游戏结束；>0=截断后用 leaf eval 估值）
 max_depth = 0
 
 # 激进度上限：越大越“搏高分尾部”
-radical_factor_max = 1.5
+radical_factor_max = 1.2
 
 # policy softmax 温度（训练时的 label 温度；搜索里也会用到）
 policy_delta = 100.0
@@ -167,7 +150,7 @@ resume = false
 # ========= 并行与日志 =========
 
 # rayon 线程数（外层顺序跑 game；FlatSearch 内部使用该线程池并行）
-threads = 23
+threads = 24
 
 # 进度输出间隔（按“已完成局数”）
 progress_interval = 5
@@ -176,7 +159,7 @@ progress_interval = 5
 
 # 每个动作搜索次数（search_n）
 # - 这是 action 样本质量/耗时的核心旋钮：越大越准也越慢
-search_n = 256
+search_n = 10240
 
 # 是否启用 UCB 动态分配（true 时会分配更多搜索给好动作）
 use_ucb = true

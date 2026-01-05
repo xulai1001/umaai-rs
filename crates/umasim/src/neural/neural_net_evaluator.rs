@@ -13,8 +13,11 @@
 
 use std::{
     cell::RefCell,
-    sync::{Arc, atomic::{AtomicU64, Ordering}},
-    time::Instant,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering}
+    },
+    time::Instant
 };
 
 use anyhow::{Context, Result};
@@ -23,7 +26,9 @@ use tract_onnx::prelude::*;
 
 use super::{Evaluator, ValueOutput};
 use crate::game::{
-    ActionScore, Game, onsen::{action::OnsenAction, game::OnsenGame}
+    ActionScore,
+    Game,
+    onsen::{action::OnsenAction, game::OnsenGame}
 };
 
 // ============================================================================
@@ -88,7 +93,7 @@ fn action_to_global_index_v1(action: &OnsenAction) -> Option<usize> {
         OnsenAction::PR => Some(10),
         OnsenAction::Dig(idx) => Some(11 + *idx as usize),
         OnsenAction::Upgrade(idx) => Some(21 + *idx as usize),
-        OnsenAction::UseTicket(is_super) => Some(if *is_super { 25 } else { 24 }),
+        OnsenAction::UseTicket(is_super) => Some(if *is_super { 25 } else { 24 })
     }
 }
 
@@ -217,7 +222,7 @@ impl NeuralNetEvaluator {
         // 理论上不会走到这里，兜底返回最后一个合法动作
         legal_mask.iter().rposition(|&x| x).unwrap_or(0)
     }
-/*
+    /*
     /// 将动作转换为全局索引
     ///
     /// 与 sample_collector::action_to_global_index 保持一致
@@ -235,7 +240,7 @@ impl NeuralNetEvaluator {
 #[derive(Clone)]
 pub struct ThreadLocalNeuralNetLeafEvaluator {
     model_path: Arc<String>,
-    stats: Arc<ThreadLocalNeuralNetLeafStats>,
+    stats: Arc<ThreadLocalNeuralNetLeafStats>
 }
 
 #[derive(Debug)]
@@ -244,7 +249,7 @@ struct ThreadLocalNeuralNetLeafStats {
     infer_batches: AtomicU64,
     infer_calls: AtomicU64,
     infer_errors: AtomicU64,
-    infer_time_ns_total: AtomicU64,
+    infer_time_ns_total: AtomicU64
 }
 
 impl ThreadLocalNeuralNetLeafStats {
@@ -254,7 +259,7 @@ impl ThreadLocalNeuralNetLeafStats {
             infer_batches: AtomicU64::new(0),
             infer_calls: AtomicU64::new(0),
             infer_errors: AtomicU64::new(0),
-            infer_time_ns_total: AtomicU64::new(0),
+            infer_time_ns_total: AtomicU64::new(0)
         }
     }
 }
@@ -265,14 +270,14 @@ pub struct ThreadLocalNeuralNetLeafStatsSnapshot {
     pub infer_batches: u64,
     pub infer_calls: u64,
     pub infer_errors: u64,
-    pub infer_time_ns_total: u64,
+    pub infer_time_ns_total: u64
 }
 
 impl ThreadLocalNeuralNetLeafEvaluator {
     pub fn new(model_path: impl Into<String>) -> Self {
         Self {
             model_path: Arc::new(model_path.into()),
-            stats: Arc::new(ThreadLocalNeuralNetLeafStats::new()),
+            stats: Arc::new(ThreadLocalNeuralNetLeafStats::new())
         }
     }
 
@@ -282,7 +287,7 @@ impl ThreadLocalNeuralNetLeafEvaluator {
             infer_batches: self.stats.infer_batches.load(Ordering::Relaxed),
             infer_calls: self.stats.infer_calls.load(Ordering::Relaxed),
             infer_errors: self.stats.infer_errors.load(Ordering::Relaxed),
-            infer_time_ns_total: self.stats.infer_time_ns_total.load(Ordering::Relaxed),
+            infer_time_ns_total: self.stats.infer_time_ns_total.load(Ordering::Relaxed)
         }
     }
 
@@ -326,7 +331,7 @@ impl ThreadLocalNeuralNetLeafEvaluator {
             let mut slot = slot.borrow_mut();
             let need_reload = match slot.as_ref() {
                 Some((p, _)) => p != self.model_path.as_str(),
-                None => true,
+                None => true
             };
             if need_reload {
                 log::info!("[NN][leaf] 线程内加载模型: {}", self.model_path.as_str());
@@ -342,16 +347,15 @@ impl ThreadLocalNeuralNetLeafEvaluator {
                 Ok(v) => Ok(v),
                 Err(e) => {
                     // 降级：逐样本 infer(1)，保证功能不挂（但会很慢）
-                    log::warn!(
-                        "[NN][leaf] batch 推理失败，回退为逐样本 infer(1)（性能受限）。原因: {e}"
-                    );
+                    log::warn!("[NN][leaf] batch 推理失败，回退为逐样本 infer(1)（性能受限）。原因: {e}");
                     let mut out_all = Vec::with_capacity(batch * OUTPUT_DIM);
                     for i in 0..batch {
                         let start = i * INPUT_DIM;
                         let end = start + INPUT_DIM;
 
-                        let input = tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features_flat[start..end].to_vec())
-                            .context("创建单样本输入张量失败")?;
+                        let input =
+                            tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features_flat[start..end].to_vec())
+                                .context("创建单样本输入张量失败")?;
                         let output = model.run(tvec!(input.into_tvalue())).context("单样本推理失败")?;
                         let output_tensor = output[0].to_array_view::<f32>().context("提取单样本输出张量失败")?;
                         let out: Vec<f32> = output_tensor.iter().copied().collect();
@@ -398,7 +402,7 @@ impl ThreadLocalNeuralNetLeafEvaluator {
             let mut slot = slot.borrow_mut();
             let need_reload = match slot.as_ref() {
                 Some((p, _)) => p != self.model_path.as_str(),
-                None => true,
+                None => true
             };
             if need_reload {
                 log::info!("[NN][leaf] 线程内加载模型: {}", self.model_path.as_str());
@@ -410,8 +414,8 @@ impl ThreadLocalNeuralNetLeafEvaluator {
             let (_, model) = slot.as_ref().expect("thread_local model");
 
             // 创建输入张量 [1, 1121]
-            let input = tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features.to_vec())
-                .context("创建输入张量失败")?;
+            let input =
+                tract_ndarray::Array2::from_shape_vec((1, INPUT_DIM), features.to_vec()).context("创建输入张量失败")?;
 
             // 运行推理
             let output = model.run(tvec!(input.into_tvalue())).context("推理失败")?;

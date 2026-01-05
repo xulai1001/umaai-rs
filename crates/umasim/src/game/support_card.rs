@@ -316,7 +316,11 @@ impl SupportCard {
                     }
                 }
                 _ => {
-                    warn!("未实现固有逻辑: #{} - {}", self.data.unique_effect_type, self.short_name());
+                    warn!(
+                        "未实现固有逻辑: #{} - {}",
+                        self.data.unique_effect_type,
+                        self.short_name()
+                    );
                     locking = true;
                 }
             } // match unique_effect_type

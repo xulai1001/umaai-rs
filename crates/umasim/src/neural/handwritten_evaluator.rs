@@ -15,9 +15,13 @@ use rand::{rngs::StdRng, seq::IndexedRandom};
 use super::{Evaluator, ValueOutput};
 use crate::{
     game::{
-        ActionScore, Game, PersonType, onsen::{action::OnsenAction, game::OnsenGame}
+        ActionScore,
+        Game,
+        PersonType,
+        onsen::{action::OnsenAction, game::OnsenGame}
     },
-    gamedata::{GAMECONSTANTS, GameConfig, onsen::ONSENDATA}, global
+    gamedata::{GAMECONSTANTS, GameConfig, onsen::ONSENDATA},
+    global
 };
 
 // ============================================================================
@@ -714,19 +718,23 @@ impl Evaluator<OnsenGame> for HandwrittenEvaluator {
                                     Some(g) => {
                                         if race_grade <= *g as i32 {
                                             // 相当于生涯比赛收益 * 缺的比赛数量
-                                            RACE_BASE_BONUS * (free.count - count) as f64 + FREE_RACE_BONUS / remain_turn as f64
+                                            RACE_BASE_BONUS * (free.count - count) as f64
+                                                + FREE_RACE_BONUS / remain_turn as f64
                                         } else {
                                             NON_TARGET_RACE_BONUS
                                         }
                                     }
-                                    None => RACE_BASE_BONUS * (free.count - count) as f64 + FREE_RACE_BONUS / remain_turn as f64
+                                    None => {
+                                        RACE_BASE_BONUS * (free.count - count) as f64
+                                            + FREE_RACE_BONUS / remain_turn as f64
+                                    }
                                 }
                             } else {
                                 NON_TARGET_RACE_BONUS
                             }
                         } else {
                             NON_TARGET_RACE_BONUS // 非目标比赛
-                        }                        
+                        }
                     };
                     // 比赛也有挖掘收益
                     value += self.evaluate_dig_value(game, action);

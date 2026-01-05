@@ -73,8 +73,18 @@ impl TrainingSample {
     /// 创建新的训练样本
     pub fn new(nn_input: Vec<f32>, policy_target: Vec<f32>, choice_target: Vec<f32>, value_target: Vec<f32>) -> Self {
         assert_eq!(nn_input.len(), NN_INPUT_DIM, "nn_input 必须是 {} 维", NN_INPUT_DIM);
-        assert_eq!(policy_target.len(), POLICY_DIM, "policy_target 必须是 {} 维", POLICY_DIM);
-        assert_eq!(choice_target.len(), CHOICE_DIM, "choice_target 必须是 {} 维", CHOICE_DIM);
+        assert_eq!(
+            policy_target.len(),
+            POLICY_DIM,
+            "policy_target 必须是 {} 维",
+            POLICY_DIM
+        );
+        assert_eq!(
+            choice_target.len(),
+            CHOICE_DIM,
+            "choice_target 必须是 {} 维",
+            CHOICE_DIM
+        );
         assert_eq!(value_target.len(), VALUE_DIM, "value_target 必须是 {} 维", VALUE_DIM);
 
         Self {

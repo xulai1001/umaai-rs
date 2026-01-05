@@ -5,8 +5,7 @@
 
 use anyhow::Result;
 use log::{info, warn};
-use rand::Rng;
-use rand::rngs::StdRng;
+use rand::{Rng, rngs::StdRng};
 use rand_distr::{Distribution, weighted::WeightedIndex};
 
 use crate::{
@@ -109,11 +108,7 @@ impl Trainer<OnsenGame> for NeuralNetTrainer {
     }
 
     fn select_event_choice(
-        &self,
-        game: &OnsenGame,
-        event: &EventData,
-        choices: &[ActionValue],
-        rng: &mut StdRng
+        &self, game: &OnsenGame, event: &EventData, choices: &[ActionValue], rng: &mut StdRng
     ) -> Result<usize> {
         if choices.is_empty() {
             return Ok(0);
@@ -176,21 +171,33 @@ impl Trainer<OnsenGame> for NeuralNetTrainer {
         };
 
         // 提取 choice logits [CHOICE_OFFSET, CHOICE_OFFSET + n)
-        let logits: Vec<f64> = output[CHOICE_OFFSET..CHOICE_OFFSET + n].iter().map(|&x| x as f64).collect();
+        let logits: Vec<f64> = output[CHOICE_OFFSET..CHOICE_OFFSET + n]
+            .iter()
+            .map(|&x| x as f64)
+            .collect();
 
         // Softmax 采样（带 temperature）
         let temperature = DEFAULT_CHOICE_TEMPERATURE.max(0.01);
         let max_logit = logits.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
 
         if !max_logit.is_finite() {
-            warn!("[Choice] 事件#{} {} logits 非有限值，回退均匀随机", event.id, event.name);
+            warn!(
+                "[Choice] 事件#{} {} logits 非有限值，回退均匀随机",
+                event.id, event.name
+            );
             return Ok(rng.random_range(0..n));
         }
 
-        let weights: Vec<f64> = logits.iter().map(|&logit| ((logit - max_logit) / temperature).exp()).collect();
+        let weights: Vec<f64> = logits
+            .iter()
+            .map(|&logit| ((logit - max_logit) / temperature).exp())
+            .collect();
         let sum: f64 = weights.iter().sum();
         if sum <= 0.0 || !sum.is_finite() {
-            warn!("[Choice] 事件#{} {} softmax sum 异常，回退均匀随机", event.id, event.name);
+            warn!(
+                "[Choice] 事件#{} {} softmax sum 异常，回退均匀随机",
+                event.id, event.name
+            );
             return Ok(rng.random_range(0..n));
         }
 
@@ -200,11 +207,7 @@ impl Trainer<OnsenGame> for NeuralNetTrainer {
                 if self.verbose {
                     info!(
                         "[Choice] 事件#{} {}: choice_head selected={}, temperature={:.2}, logits={:?}",
-                        event.id,
-                        event.name,
-                        selected,
-                        temperature,
-                        logits
+                        event.id, event.name, selected, temperature, logits
                     );
                 }
                 Ok(selected)

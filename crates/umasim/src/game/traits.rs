@@ -424,7 +424,9 @@ pub trait Trainer<G: Game> {
     /// 选择事件选项（新接口，携带完整的 EventData）
     ///
     /// 默认实现：chance 事件按权重采样；决策事件回退到 select_choice。
-    fn select_event_choice(&self, game: &G, event: &EventData, choices: &[ActionValue], rng: &mut StdRng) -> Result<usize> {
+    fn select_event_choice(
+        &self, game: &G, event: &EventData, choices: &[ActionValue], rng: &mut StdRng
+    ) -> Result<usize> {
         if choices.is_empty() {
             return Ok(0);
         }
@@ -446,7 +448,10 @@ pub trait Trainer<G: Game> {
             match WeightedIndex::new(probs) {
                 Ok(weights) => Ok(weights.sample(rng)),
                 Err(e) => {
-                    warn!("事件#{} {} random_choice_prob 非法（{}），回退为均匀随机", event.id, event.name, e);
+                    warn!(
+                        "事件#{} {} random_choice_prob 非法（{}），回退为均匀随机",
+                        event.id, event.name, e
+                    );
                     Ok(rng.random_range(0..choices.len()))
                 }
             }

@@ -163,13 +163,25 @@ pub struct ActionScore<A: ActionEnum + Serialize> {
     pub score: Vec<f64>
 }
 
-impl <A: ActionEnum + Serialize> ActionScore<A> {
+impl<A: ActionEnum + Serialize> ActionScore<A> {
     pub fn new(selection: A, actions: Vec<A>, score: Vec<f64>) -> Self {
         if score.is_empty() && !actions.is_empty() {
             let default_score = vec![0.0; actions.len()];
-            Self { selection, actions, score: default_score }
+            Self {
+                selection,
+                actions,
+                score: default_score
+            }
         } else {
             Self { selection, actions, score }
         }
+    }
+
+    pub fn print_score(&self) -> String {
+        let mut line = String::new();
+        for (i, score) in self.score.iter().enumerate() {
+            line += &format!("{}: {:.0} ", self.actions[i], score);
+        }
+        line
     }
 }

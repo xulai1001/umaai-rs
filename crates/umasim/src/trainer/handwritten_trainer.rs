@@ -12,6 +12,7 @@ use anyhow::Result;
 use colored::Colorize;
 use log::info;
 use rand::prelude::StdRng;
+
 use crate::{
     game::{Trainer, onsen::game::OnsenGame},
     gamedata::ActionValue,
@@ -91,7 +92,12 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
             // 温泉选择：使用硬编码顺序
             let idx = self.evaluator.select_onsen_index(game, actions);
             if self.verbose {
-                info!("[回合 {}] {} {}", game.turn + 1, "手写策略选择温泉:".cyan(), actions[idx].to_string().green());
+                info!(
+                    "[回合 {}] {} {}",
+                    game.turn + 1,
+                    "手写策略选择温泉:".cyan(),
+                    actions[idx].to_string().green()
+                );
             }
             return Ok(idx);
         }
@@ -102,7 +108,12 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
             // 装备升级：使用智能升级策略
             let idx = self.evaluator.select_upgrade_action(game, actions);
             if self.verbose {
-                info!("[回合 {}] {} {}", game.turn + 1, "手写策略选择装备升级:".cyan(), actions[idx].to_string().green());
+                info!(
+                    "[回合 {}] {} {}",
+                    game.turn + 1,
+                    "手写策略选择装备升级:".cyan(),
+                    actions[idx].to_string().green()
+                );
             }
             return Ok(idx);
         }
@@ -117,7 +128,17 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
         };
 
         if self.verbose {
-            info!("[回合 {}] {}: {}", game.turn + 1, "手写策略选择".cyan(), actions[idx].to_string().green());
+            if let Some(scores) = &selected_action {
+                if scores.score.iter().any(|s| *s != 0.0) {
+                    info!("{}", scores.print_score());
+                }
+            }
+            info!(
+                "[回合 {}] {}: {}",
+                game.turn + 1,
+                "手写策略选择".cyan(),
+                actions[idx].to_string().green()
+            );
         }
 
         Ok(idx)
@@ -139,7 +160,9 @@ impl Trainer<OnsenGame> for HandwrittenTrainer {
         if self.verbose {
             info!(
                 "[回合 {}] 手写策略选择事件选项: {} (索引 {})",
-                game.turn, choices[best_idx].to_string().green(), best_idx.to_string().green()
+                game.turn,
+                choices[best_idx].to_string().green(),
+                best_idx.to_string().green()
             );
         }
 

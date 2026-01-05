@@ -154,7 +154,7 @@ impl GameStatusBase {
         }
         //if ret.win_races != 0 {
         //    info!("win_races: {:b}", ret.win_races);
-       // }
+        // }
         Ok(ret)
     }
 

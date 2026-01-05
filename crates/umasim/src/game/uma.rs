@@ -220,7 +220,8 @@ impl Uma {
     /// 返回当前所处的自选比赛区间
     pub fn find_free_race(&self, turn: i32) -> Option<&FreeRaceData> {
         if let Ok(data) = self.get_data() {
-            data.free_races.iter()
+            data.free_races
+                .iter()
                 .find(|f| f.start_turn <= turn as u32 && f.end_turn >= turn as u32)
         } else {
             None

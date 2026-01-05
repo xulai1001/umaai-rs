@@ -35,6 +35,6 @@ pub use handwritten_evaluator::HandwrittenEvaluator;
 pub use neural_net_evaluator::{
     NeuralNetEvaluator,
     ThreadLocalNeuralNetLeafEvaluator,
-    ThreadLocalNeuralNetLeafStatsSnapshot,
+    ThreadLocalNeuralNetLeafStatsSnapshot
 };
 pub use value_output::ValueOutput;

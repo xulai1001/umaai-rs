@@ -43,10 +43,10 @@ impl FreeRaceData {
         for i in self.start_turn..=self.end_turn {
             if let Some(g) = &self.grade {
                 if race_grades[i as usize] <= *g as i32 {
-                    ret |= 1 << (i-11);
+                    ret |= 1 << (i - 11);
                 }
             } else {
-                ret |= 1 << (i-11);
+                ret |= 1 << (i - 11);
             }
         }
         self.mask = ret;
@@ -575,7 +575,6 @@ pub struct CollectorConfig {
     pub drop_zero_mean: bool,
 
     // ========== Choice 样本（P2）==========
-
     /// 是否采集 decision event 的 choice 样本
     #[serde(default = "default_collector_collect_choice")]
     pub collect_choice: bool,
@@ -723,7 +722,7 @@ impl Default for CollectorConfig {
             use_ucb: None,
             search_group_size: None,
             search_cpuct: None,
-            expected_search_stdev: None,
+            expected_search_stdev: None
         }
     }
 }
@@ -937,7 +936,7 @@ mod tests {
             grade: Some(1),
             mask: 0
         };
-        free_race.update_turn_mask();   // 只有G1会被标1
+        free_race.update_turn_mask(); // 只有G1会被标1
         println!("{:b}", free_race.mask); // 10111010000111110100000000000000000000
         Ok(())
     }

@@ -162,7 +162,7 @@ impl BaseGame {
             None
         }
     }
-    
+
     /// 检测自选比赛是否达标
     pub fn check_free_race(&self) -> bool {
         if let Ok(data) = self.uma.get_data() {
@@ -170,11 +170,9 @@ impl BaseGame {
                 // 只在结束回合+1时检测
                 if self.turn as u32 == free_race.end_turn + 1 {
                     let count = self.uma.count_free_race(free_race);
-                    info!("回合 {} -> {} 已比赛 {} / {} 场",
-                        free_race.start_turn,
-                        free_race.end_turn,
-                        count,
-                        free_race.count
+                    info!(
+                        "回合 {} -> {} 已比赛 {} / {} 场",
+                        free_race.start_turn, free_race.end_turn, count, free_race.count
                     );
                     if count < free_race.count {
                         warn!("自选比赛未达标，寄了");

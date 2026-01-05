@@ -19,8 +19,10 @@ use crate::game::{ActionScore, Game};
 ///
 /// # 类型参数
 /// - `G`: 游戏类型，必须实现 `Game` trait
-pub trait Evaluator<G: Game>: Send + Sync 
-where G::Action: Serialize {
+pub trait Evaluator<G: Game>: Send + Sync
+where
+    G::Action: Serialize
+{
     /// 选择动作（策略）
     ///
     /// 在模拟过程中选择下一步动作。
@@ -31,7 +33,7 @@ where G::Action: Serialize {
     /// - `rng`: 随机数生成器
     ///
     /// # 返回
-    /// - `Some(action)`: 选择的动作
+    /// - `Some(ActionScore<action>)`: 选择的动作，所有动作的列表，和每个动作各自的评分
     /// - `None`: 无可选动作（游戏结束或异常）
     fn select_action(&self, game: &G, rng: &mut StdRng) -> Option<ActionScore<G::Action>>;
 

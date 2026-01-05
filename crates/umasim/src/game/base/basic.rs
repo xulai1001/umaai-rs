@@ -468,6 +468,7 @@ impl Game for BasicGame {
     fn deyilv(&mut self, person_index: i32) -> Result<f32> {
         if person_index < 6 {
             let (eff, lock) = self.deck[person_index as usize].calc_training_effect(self, 0)?;
+            self.deck[person_index as usize].effect = eff.clone();
             if lock {
                 self.deck[person_index as usize].is_locked = true;
             }

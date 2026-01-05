@@ -9,10 +9,10 @@ use umasim::{
     game::{Game, InheritInfo, onsen::game::OnsenGame},
     gamedata::{GAMECONSTANTS, GameConfig, init_global},
     global,
+    search::SearchConfig,
     trainer::*,
     utils::init_logger
 };
-use umasim::search::SearchConfig;
 
 /// 单次模拟结果
 struct SimulationResult {
@@ -36,7 +36,7 @@ fn run_onsen_once(
             let mut game2 = game.clone();
             game2.run_stage(&trainer_hand, &mut rng)?;
         }
-        game.run_stage(&trainer_mcts, &mut rng)?;        
+        game.run_stage(&trainer_mcts, &mut rng)?;
     }
     game.on_simulation_end(&trainer_mcts, &mut rng)?;
 

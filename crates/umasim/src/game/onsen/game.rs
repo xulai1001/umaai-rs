@@ -484,20 +484,27 @@ impl OnsenGame {
         } else {
             1
         };
-
-        let mut hint_event = if rng.random_bool(attr_prob as f64) || hint_level == 0 {
-            // 红点提供属性. 超过最大Hint等级限制时只能提供属性
-            EventData::hint_attr_event(self.persons[person_index].train_type as usize, person_index)?
+        // 美妙固有: Hint判定N次
+        let hint_count = if person_index < 6 {
+            1 + self.deck[person_index].effect.hint_count_bonus
         } else {
-            // 红点提供技能
-            self.deck[person_index].total_hints += hint_level;
-            EventData::hint_skill_event(hint_level, person_index)
+            1
         };
-        //hint_event.name = format!("{} - {}", hint_event.name, self.deck[person_index].short_name()?); // short_name is slow
-        if !has_friendship {
-            hint_event.choices[0].friendship = 0;
+        for _i in 0..hint_count {
+            let mut hint_event = if rng.random_bool(attr_prob as f64) || hint_level == 0 {
+                // 红点提供属性. 超过最大Hint等级限制时只能提供属性
+                EventData::hint_attr_event(self.persons[person_index].train_type as usize, person_index)?
+            } else {
+                // 红点提供技能
+                self.deck[person_index].total_hints += hint_level;
+                EventData::hint_skill_event(hint_level, person_index)
+            };
+            //hint_event.name = format!("{} - {}", hint_event.name, self.deck[person_index].short_name()?); // short_name is slow
+            if !has_friendship {
+                hint_event.choices[0].friendship = 0;
+            }
+            self.unresolved_events.push(hint_event);
         }
-        self.unresolved_events.push(hint_event);
         Ok(())
     }
 
@@ -1542,6 +1549,7 @@ impl Game for OnsenGame {
     fn deyilv(&mut self, person_index: i32) -> Result<f32> {
         if person_index < 6 {
             let (eff, lock) = self.deck[person_index as usize].calc_training_effect(self, 0)?;
+            self.deck[person_index as usize].effect = eff.clone();
             if lock {
                 self.deck[person_index as usize].is_locked = true;
             }
@@ -1801,4 +1809,3 @@ impl Game for OnsenGame {
         Ok(())
     }
 }
-
