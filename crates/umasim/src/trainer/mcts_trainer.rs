@@ -8,8 +8,8 @@
 //! - 自对弈训练
 
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use anyhow::Result;
+use std::sync::{Arc, Mutex};
+use anyhow::{Result, anyhow};
 use colored::Colorize;
 use flexi_logger::LogSpecification;
 use log::{info, warn};
@@ -48,7 +48,9 @@ pub struct MctsTrainer {
     /// 上一回合最好的选择分数. 使用Atomic以实现内部可变
     pub last_score: (AtomicU64, AtomicU64),
     /// 第一回合分数
-    pub initial_score: (AtomicU64, AtomicU64)
+    pub initial_score: (AtomicU64, AtomicU64),
+    /// 保存当前的搜索结果用于输出
+    pub search_output: Arc<Mutex<SearchOutput>>
 }
 
 impl MctsTrainer {
@@ -62,7 +64,8 @@ impl MctsTrainer {
             mcts_selection: "pt".to_string(),
             last_game: None,
             last_score: (AtomicU64::new(0), AtomicU64::new(0)),
-            initial_score: (AtomicU64::new(0), AtomicU64::new(0))
+            initial_score: (AtomicU64::new(0), AtomicU64::new(0)),
+            search_output: Arc::new(Mutex::new(SearchOutput::default()))
         }
     }
 
@@ -293,6 +296,13 @@ impl Trainer<OnsenGame> for MctsTrainer {
 
         // 使用 MCTS 搜索
         let search_output = self.search.search(game, actions, rng)?;
+        {
+            // 保存搜索结果
+            let mut s = self.search_output
+                .lock()
+                .map_err(|_| anyhow!("lock failed"))?;
+            *s = search_output.clone();
+        }
         global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
 
         let best_action = search_output.best_action();

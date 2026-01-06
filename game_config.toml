@@ -67,10 +67,10 @@ neuralnet_model_path = "saved_models/onsen_v18/model.onnx"
 
 # 蒙特卡洛配置（仅当 trainer = "mcts" 时生效）
 [mcts]
-# 每个动作的搜索次数（默认 10240；太慢可选 256/512/1024/2048）
-search_n = 10240
-# UCB 每组搜索次数（建议 <= search_n；越小越快但更噪）
-search_group_size = 256
+# 每个动作的搜索次数（默认 12288；太慢可选 8192/4096）
+search_n = 12288
+# UCB 每组搜索次数（不动）
+search_group_size = 2048
 
 # 最大搜索深度（0=搜到游戏结束；>0=截断后用 leaf eval 估值）
 max_depth = 0
@@ -84,7 +84,8 @@ policy_delta = 100.0
 # UCB 搜索分配
 use_ucb = true
 search_cpuct = 1.0
-expected_search_stdev = 2200.0
+# 取1.65倍标准差 4500 * 1.65
+expected_search_stdev = 7500.0
 
 # leaf eval 微批大小（仅 max_depth>0 && rollout_evaluator="nn" 时生效）
 rollout_batch_size = 64

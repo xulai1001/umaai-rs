@@ -3,10 +3,11 @@
 //! 定义分数分布统计和搜索输出结构。
 
 use std::cell::Cell;
-
+use anyhow::{anyhow, Result};
+use serde::{Serialize, Deserialize};
 use super::SearchConfig;
 use crate::{
-    game::onsen::{action::OnsenAction, game::OnsenGame},
+    game::{ActionEnum, onsen::{action::OnsenAction, game::OnsenGame}},
     sample_collector::action_to_global_index,
     training_sample::{CHOICE_DIM, TrainingSample}
 };
@@ -192,7 +193,7 @@ impl ActionResult {
 /// 搜索输出
 ///
 /// 包含所有动作的搜索结果和最优动作信息。
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct SearchOutput {
     /// 动作列表
     pub actions: Vec<OnsenAction>,
@@ -315,22 +316,42 @@ impl SearchOutput {
 
         policy
     }
-    /*
-    /// 打印搜索结果摘要
-    pub fn print_summary(&self) {
-        println!("=== 搜索结果 (radical_factor={:.1}) ===", self.radical_factor);
-        for (i, (action, result)) in self.actions.iter().zip(self.action_results.iter()).enumerate() {
-            let mark = if i == self.best_action_idx { "*" } else { " " };
-            println!(
-                "{} {:12}: mean={:.0}, stdev={:.0}, weighted={:.0}, n={}",
-                mark,
-                format!("{}", action),
-                result.mean(),
-                result.stdev(),
-                result.weighted_mean(self.radical_factor),
-                result.count()
-            );
+
+    /// 统计两种评分的动作均分和标准差，用于结果输出
+    pub fn to_scores(&self) -> Vec<Vec<ScoreEntry>> {
+        let mut ret = vec![];
+        for which in 0..2 {
+            let mut entries = vec![];
+            for i in 0..self.actions.len() {
+                let result = match which {
+                    0 => &self.action_results[i].0,
+                    1 => &self.action_results[i].1,
+                    _ => unreachable!()
+                };
+                entries.push(ScoreEntry {
+                    action: self.actions[i].to_string(),
+                    radical_factor: self.radical_factor,
+                    count: result.num as i64,
+                    mean: result.mean(),
+                    weighted_mean: result.weighted_mean(self.radical_factor),
+                    stdev: result.stdev()
+                });
+            }
+            ret.push(entries);
         }
+        ret
     }
-    */
+
+}
+
+
+/// 动作均分和标准差，用于结果输出
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScoreEntry {
+    pub action: String,
+    pub radical_factor: f64,
+    pub count: i64,
+    pub mean: f64,
+    pub weighted_mean: f64,
+    pub stdev: f64
 }

@@ -2,7 +2,7 @@
 //!
 //! author: curran
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use inquire::Select;
 use log::{info, warn};
 use rand::{SeedableRng, rngs::StdRng};
@@ -51,7 +51,17 @@ fn run_onsen_once(
                     let path = format!("logs/turn{}.json", game_for_save.turn);
                     let json = serialize_game(&game)?;
                     fs_err::write(&path, &json)?;
-                    warn!("已保存到 {path}");
+                    let mcts_path = format!("logs/search_turn{}.json", game_for_save.turn);
+                    let mcts_result = {
+                        let output = trainer_mcts.search_output
+                            .lock()
+                            .map_err(|_| anyhow!("lock failed"))?;
+                        output.to_scores()
+                    };
+                    let json = serde_json::to_string_pretty(&mcts_result)?;
+                    fs_err::write(&mcts_path, &json)?;
+
+                    warn!("已保存回合信息 -> {path}, 蒙特卡洛结果 -> {mcts_path}");
                 }
                 "退出" => {
                     break;
