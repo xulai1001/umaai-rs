@@ -15,9 +15,9 @@ extra_count = [10, 0, 0, 20, 20, 50]
 # 传说秘泉(9) - 比赛+80%（⭐特殊：第三年9月强制选择）
 onsen_order = [
     1, 3, 2,    # 第一年
-    7, 5, 2,   # 第二年
+    6, 7, 2,   # 第二年
     8, 9,       # 第三年
-    4, 6     # 递补用
+    4, 5     # 递补用
 ]
 
 # 温泉选择是否允许蒙特卡洛自由发挥（为false时，严格按照上面的优先顺序选择）
@@ -34,16 +34,16 @@ log_level = "info"
 simulation_count = 1
 
 # 马娘ID 参考umaDB.json
-uma = 106301
+uma = 100603
 
 # 卡组(ID, 突破等级, 参考gamedata/cardDB.json)
 # 温泉剧本需要包含友人卡 (chara_id = 9050)
 # 21110 [力]美妙姿势 [速]气槽 [速]东海帝王 [耐]机伶金花  [根]黄金旅程 [友]保科健子 score_mean_threshold = 60000 choice_score_mean_threshold = 62000
-cards = [302834, 302824, 302754, 302744, 302644, 302764]
+#cards = [302834, 302824, 302754, 302744, 302644, 302764]
 # 20111 [速]气槽 [速]东海帝王 [力]美妙姿势 [根]黄金旅程 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
 #cards = [302824, 302754, 302834, 302644, 302484, 302764]
 # 21101 [速]气槽 [速]东海帝王 [耐]机伶金花 [力]美妙姿势 [智]谋勇兼备 [友]保科健子 score_mean_threshold = 58000 choice_score_mean_threshold = 60000
-#cards = [302824, 302754, 302744, 302834, 302484, 302764]
+cards = [302824, 302754, 302744, 302834, 302484, 302764]
 # 32000 [速]爱慕律动 [速]气槽 [速]东海帝王 [耐]机伶金花 [耐]超常骏骥 [友]保科健子 score_mean_threshold = 58500 choice_score_mean_threshold = 60500
 #cards = [302654, 302824, 302754, 302744, 302794, 302764]
 
@@ -75,8 +75,13 @@ search_group_size = 2048
 # 最大搜索深度（0=搜到游戏结束；>0=截断后用 leaf eval 估值）
 max_depth = 0
 
-# 激进度上限：越大越“搏高分尾部”
-radical_factor_max = 1.2
+# 激进度上限：越大越重视胡局
+# 0 - 完全平均
+# 0-1 - 轻微忽视差局面
+# 1-2 - 忽视差局面，只统计好局面
+# 2-4 - 只考虑很好的局面
+# >4 - 只考虑最好的局面
+radical_factor_max = 1.4
 
 # policy softmax 温度（训练时的 label 温度；搜索里也会用到）
 policy_delta = 100.0
@@ -84,8 +89,8 @@ policy_delta = 100.0
 # UCB 搜索分配
 use_ucb = true
 search_cpuct = 1.0
-# 取1.65倍标准差 4500 * 1.65，对评分接近的选项保留更多算力
-expected_search_stdev = 7500.0
+# ucb 反比例函数系数，越大越倾向于保留较低分的选项继续搜索
+expected_search_stdev = 15000.0
 
 # leaf eval 微批大小（仅 max_depth>0 && rollout_evaluator="nn" 时生效）
 rollout_batch_size = 64

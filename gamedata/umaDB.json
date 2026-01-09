@@ -8600,6 +8600,40 @@
     ],
     "star": 5
   },
+  "112402": {
+    "bonusData": [],
+    "fiveStatusBonus": [
+      0,
+      0,
+      10,
+      20,
+      0
+    ],
+    "fiveStatusInitial": [
+      108,
+      103,
+      116,
+      104,
+      119
+    ],
+    "freeRaces": [],
+    "gameId": 112402,
+    "name": "[暁光]吹波糖",
+    "preferRaces": [],
+    "preferReds": [],
+    "races": [
+      11,
+      22,
+      30,
+      33,
+      43,
+      45,
+      59,
+      67,
+      69
+    ],
+    "star": 5
+  },
   "112701": {
     "bonusData": [],
     "fiveStatusBonus": [

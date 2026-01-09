@@ -118,8 +118,8 @@ impl ActionResult {
     ///
     /// # 算法
     /// 对于每个分数 s：
-    /// - rank_ratio = 累计到 s 的样本比例
-    /// - weight = rank_ratio^radical_factor
+    /// - rank_ratio = 累计到 s 的样本比例 0..1
+    /// - weight = rank_ratio^radical_factor -- 在 0..1 范围内 radical_factor 只影响凹凸性. <1时为凹函数
     /// - weighted_sum += weight * count * s
     pub fn weighted_mean(&self, radical_factor: f64) -> f64 {
         if self.num == 0 {
@@ -166,7 +166,7 @@ impl ActionResult {
             let rank_ratio = (cumulative + 0.5 * c) * n_inv;
             // 按排名加权
             let weight = rank_ratio.powf(radical_factor);
-
+            //println!("ratio={rank_ratio} weight={weight} radical={radical_factor}");
             weighted_sum += weight * c * score as f64;
             weight_total += weight * c;
             cumulative += c;
@@ -218,10 +218,8 @@ impl SearchOutput {
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
-                //let wa = a.0.weighted_mean(radical_factor);
-                //let wb = b.0.weighted_mean(radical_factor);
-                let wa = a.0.mean();
-                let wb = b.0.mean();
+                let wa = a.0.weighted_mean(radical_factor);
+                let wb = b.0.weighted_mean(radical_factor);
                 wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)
@@ -246,8 +244,8 @@ impl SearchOutput {
             .iter()
             .enumerate()
             .max_by(|(_, a), (_, b)| {
-                let wa = a.1.mean(); // 不使用weighted，有问题
-                let wb = b.1.mean();
+                let wa = a.1.weighted_mean(self.radical_factor);
+                let wb = b.1.weighted_mean(self.radical_factor);
                 wa.partial_cmp(&wb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(i, _)| i)

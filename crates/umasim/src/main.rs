@@ -334,6 +334,7 @@ async fn main() -> Result<()> {
                     // info!("search_config = {search_config:?}");
                     let mut trainer = MctsTrainer::new(search_config).verbose(true);
                     trainer.mcts_selection = game_config.mcts_selection.clone();
+                    trainer.mcts_onsen = game_config.mcts_selected_onsen;
 
                     // P3-MVP：leaf eval 评估器开关（用于 A/B 对照）
                     match game_config.mcts.rollout_evaluator.as_str() {

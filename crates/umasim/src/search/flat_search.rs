@@ -6,7 +6,7 @@
 //! - UCB 分配：根据 UCB 公式动态分配搜索资源（C++ UmaAi 风格）
 
 use anyhow::Result;
-use log::debug;
+use log::{debug, info};
 use rand::{SeedableRng, rngs::StdRng};
 use rayon::prelude::*;
 
@@ -405,14 +405,16 @@ impl FlatSearch {
 
             let value = result.0.weighted_mean(radical_factor);
             // UCB 公式：value 越高或搜索次数越少，search_value 越高
-            let search_value = value + cpuct * expected_stdev * sqrt_total / n;
-
+            let delta = cpuct * expected_stdev * sqrt_total / n;
+            let search_value = value + delta;
+            //println!("#{i} score: {value:.0}, ucb: {delta:.0}, sqrt_total: {sqrt_total:.0}, n: {n}");
             if search_value > best_search_value {
                 best_search_value = search_value;
                 best_idx = i;
             }
         }
-
+       // println!("best: #{best_idx}");
+       // println!("--------------------");
         best_idx
     }
 
@@ -626,7 +628,7 @@ impl FlatSearch {
     ) -> Result<(f64, f64)> {
         let mut sim_game = game.clone();
         let mut best_score = (0.0, 0.0);
-        //let trainer = SimulationTrainer { evaluator: &self.evaluator };
+        
         sim_game.apply_action(action, rng)?;
         for i in sim_game.get_upgradeable_equipment() {
             let score = self.simulate_dig_upgrade(&sim_game, &OnsenAction::Upgrade(i as i32), rng)?;

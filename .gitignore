@@ -8,3 +8,5 @@ saved_models
 pub
 docs
 training
+scripts/export_support_card/*.json
+master.mdb
