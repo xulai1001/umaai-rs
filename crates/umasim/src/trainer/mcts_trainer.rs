@@ -106,10 +106,10 @@ impl MctsTrainer {
     ) -> String {
         let text = format!("{action}: {score:.0}");
         let delta = best_score - score;
-        if delta <= 0.0 {
+        if delta <= 40.0 {
             format!("{}", text.bright_yellow().on_red())
-        } else if delta <= 50.0 {
-            format!("{}", text.green())
+        } else if delta <= 100.0 {
+            format!("{}", text.bright_green())
         } else if delta <= 300.0 {
             text
         } else {
@@ -172,7 +172,7 @@ impl MctsTrainer {
                     best_score - mean_weighted
                 ));
             }
-            info!("[回合 {} 重视评分] {}", game.turn + 1, line.join(" "));
+            info!("[回合 {}] {}", game.turn + 1, line.join(" "));
         }
 
         // 保存分数
@@ -185,11 +185,11 @@ impl MctsTrainer {
     }
 
     // 计算本回合PT加成均分
-    fn update_score_2(&self, game: &OnsenGame, actions: &[OnsenAction], search_output: &SearchOutput) {
+    fn update_score_pt(&self, game: &OnsenGame, actions: &[OnsenAction], search_output: &SearchOutput) {
         let mut sum = 0.0;
         let mut mean_weighted = 0.0;
         let mut count = 0;
-        let best_action = search_output.best_action_2();
+        let best_action = search_output.best_action_pt();
 
         for r in &search_output.action_results {
             sum += r.1.sum;
@@ -209,7 +209,7 @@ impl MctsTrainer {
                 best_score = weighted_mean;
             }
         }
-        if self.verbose {
+        if self.verbose && search_output.best_action() != search_output.best_action_pt() {
             // 输出搜索结果
             let mut line = vec![];
             // 输出各动作的分数
@@ -223,7 +223,7 @@ impl MctsTrainer {
                     best_score - mean_weighted
                 ));
             }
-            info!("[回合 {} 重视 PT ] {}", game.turn + 1, line.join(" "));
+            info!("[回合 {}/PT] {}", game.turn + 1, line.join(" "));
         }
 
         // 保存分数
@@ -248,6 +248,7 @@ impl Trainer<OnsenGame> for MctsTrainer {
 
         // 只有一个动作时直接返回
         if actions.len() <= 1 {
+            info!("{}", format!("蒙特卡洛: {}", actions[0]).bright_green());
             return Ok(0);
         }
         //println!("{game:#?}");
@@ -295,7 +296,7 @@ impl Trainer<OnsenGame> for MctsTrainer {
         global!(LOGGER).lock().expect("logger lock").pop_temp_spec();
 
         let best_action = search_output.best_action();
-        let best_action_2 = search_output.best_action_2();
+        let best_action_2 = search_output.best_action_pt();
         let selection = match self.mcts_selection.as_str() {
             "pt" => best_action_2,
             _ => best_action
@@ -305,8 +306,18 @@ impl Trainer<OnsenGame> for MctsTrainer {
         //let idx = actions.iter().position(|a| a == best_action).unwrap_or(0);
         let idx = actions.iter().position(|a| a == selection).unwrap_or(0);
         self.update_score(game, actions, &search_output);
-        self.update_score_2(game, actions, &search_output);
+        self.update_score_pt(game, actions, &search_output);
 
+        if best_action == best_action_2 {
+            info!("{}", format!("蒙特卡洛: {best_action}").bright_green());
+        } else {
+            info!("{}", format!(
+                    "蒙特卡洛-重视评分: {}, 重视PT: {}",
+                    best_action.to_string().bright_green(),
+                    best_action_2.to_string().cyan()
+                ).bright_green()
+            );
+        }
         Ok(idx)
     }
 

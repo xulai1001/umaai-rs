@@ -887,6 +887,40 @@ fn default_simulation_count() -> usize {
     1
 }
 
+/// 简化的覆盖配置
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverrideGameConfig {
+    pub onsen_order: OnsenOrder,
+    pub config_override: OverrideConfig,
+    pub mcts: MctsConfig
+}
+
+/// 简化的覆盖配置 - GameConfig部分
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverrideConfig {
+    /// 种马额外属性
+    pub extra_count: Array6,
+    /// 温泉选择是否使用蒙特卡洛
+    pub mcts_selected_onsen: bool,
+    /// 日志级别
+    pub log_level: String
+}
+
+impl OverrideGameConfig {
+    pub fn merge(self, game: &GameConfig) -> GameConfig {
+        let mut ret = game.clone();
+
+        ret.onsen_order = self.onsen_order;
+        ret.extra_count = self.config_override.extra_count;
+        ret.log_level = self.config_override.log_level;
+        ret.mcts_selected_onsen = self.config_override.mcts_selected_onsen;
+        ret.mcts.search_n = self.mcts.search_n;
+        ret.mcts.radical_factor_max = self.mcts.radical_factor_max;
+
+        ret
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

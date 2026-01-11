@@ -22,7 +22,7 @@ use umasim::{
     sample_collector::GameSample,
     trainer::CollectorTrainer,
     training_sample::TrainingSampleBatch,
-    utils::init_logger
+    utils::{init_logger, load_game_config}
 };
 
 /// 训练数据生成器命令行参数
@@ -75,8 +75,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     // 读取配置文件
-    let config_file = fs_err::read_to_string("game_config.toml")?;
-    let config: GameConfig = toml::from_str(&config_file)?;
+    let config = load_game_config()?;
 
     // 初始化日志（使用 warn 级别减少输出）
     init_logger("generate", "info")?;

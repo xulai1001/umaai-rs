@@ -185,15 +185,15 @@ impl Uma {
 
     pub fn calc_score_with_pt_favor(&self) -> i32 {
         let cons = global!(GAMECONSTANTS);
-        // 技能分x4
-        let mut score = self.skill_score + (self.total_pt() as f32 * cons.pt_score_rate) as i32;
-        score = ((score as f32) * cons.pt_favor_rate) as i32;
+        // 技能点x8, 不计Hint，只考虑技能点
+        let mut score = self.skill_score + (self.skill_pt as f32 * cons.pt_score_rate) as i32;
+        score = (score as f32 * cons.pt_favor_rate) as i32;
         for i in 0..5 {
             let status = self.five_status[i].min(self.five_status_limit[i]).max(0) as usize;
             score += cons.five_status_final_score[status];
         }
         // 乘一个系数与原本评分数量级接近
-        ((score as f64) * 0.45) as i32
+        ((score as f64) * 0.37) as i32
     }
 
     pub fn add_value(&mut self, action: &ActionValue) -> &mut Self {

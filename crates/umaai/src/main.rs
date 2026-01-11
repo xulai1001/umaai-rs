@@ -1,12 +1,13 @@
 //! umaai-rs - Rewrite UmaAI in Rust
 //!
 //! author: curran
-use std::{path::Path, time::Instant};
+use std::{path::Path, sync::Mutex, time::{Duration, Instant}};
 
 use anyhow::{Result, anyhow};
 use colored::Colorize;
 use log::info;
 use rand::{SeedableRng, rngs::StdRng};
+
 use serde::Serialize;
 use text_to_ascii_art::to_art;
 use umasim::{
@@ -15,20 +16,16 @@ use umasim::{
         InheritInfo,
         Trainer,
         onsen::{OnsenTurnStage, action::OnsenAction}
-    },
-    gamedata::{GameConfig, init_global},
-    neural::{Evaluator, NeuralNetEvaluator},
-    search::SearchConfig,
-    trainer::MctsTrainer,
-    utils::{check_windows_terminal, check_working_dir, init_logger, pause}
+    }, gamedata::{GameConfig, init_global}, global, neural::{Evaluator, NeuralNetEvaluator}, search::SearchConfig, trainer::MctsTrainer, utils::{check_windows_terminal, check_working_dir, init_logger, load_game_config, pause}
 };
 
-use crate::protocol::{
+use crate::{protocol::{
     GameStatusOnsen,
     urafile::{UraFileWatcher, parse_game}
-};
+}, utils::{SAVED_GAME, hotkey_handler}};
 
 pub mod protocol;
+pub mod utils;
 
 pub fn run_evaluate<G, E>(game: &G, evaluator: &E, rng: &mut StdRng) -> Result<()>
 where
@@ -62,8 +59,7 @@ async fn main_guard() -> Result<()> {
         check_working_dir()?;
     }
     // 1. 先读取配置文件
-    let config_file = fs_err::read_to_string("game_config.toml")?;
-    let game_config: GameConfig = toml::from_str(&config_file)?;
+    let game_config = load_game_config()?;
     let mcts_config = SearchConfig::new_game_config(&game_config);
     // 2. 根据配置初始化日志
     init_logger("umaai", &game_config.log_level)?;
@@ -71,6 +67,9 @@ async fn main_guard() -> Result<()> {
 
     // 3. 再初始化全局数据
     init_global()?;
+
+    // ctrl-s handler
+    tokio::spawn(async move { hotkey_handler().await; });
 
     let mut rng = StdRng::from_os_rng();
 
@@ -82,7 +81,8 @@ async fn main_guard() -> Result<()> {
     // MCTS训练员
     let mut trainer = MctsTrainer::new(mcts_config).verbose(true);
     trainer.mcts_onsen = game_config.mcts_selected_onsen;
-    trainer.mcts_selection = game_config.mcts_selection.clone();
+    // 这个设置在AI模式下不生效
+    trainer.mcts_selection = "score".to_string();
 
     // P3-MVP：leaf eval 评估器开关（用于 A/B 对照）
     match game_config.mcts.rollout_evaluator.as_str() {
@@ -127,7 +127,15 @@ async fn main_guard() -> Result<()> {
         let contents = watcher.watch("thisTurn.json")?;
         match parse_game::<GameStatusOnsen>(&contents) {
             Ok(mut game) => {
-                //println!("{game:#?}");
+                // 保存一份到全局
+                {
+                    if let Some(mutex) = SAVED_GAME.get() {
+                        *mutex.lock().expect("saved game") = game.clone();
+                    } else {
+                        SAVED_GAME.set(Mutex::new(game.clone())).expect("SAVED_GAME already initialized");
+                    }
+                }
+                    
                 if game.turn <= 1 {
                     // 直接模拟一局看得分，或者输出模拟参数
                     let deck = game
@@ -148,7 +156,6 @@ async fn main_guard() -> Result<()> {
                     // 是温泉选择状态
                     let actions = game.list_actions_onsen_select();
                     let onsen = trainer.select_action(&game, &actions, &mut rng)?;
-                    println!("{}", format!("蒙特卡洛：{}", actions[onsen]).magenta());
                     // 前进一步选择升级
                     game.apply_action(&actions[onsen], &mut rng)?;
                     let upgradeable = game.get_upgradeable_equipment();
@@ -157,8 +164,7 @@ async fn main_guard() -> Result<()> {
                             .iter()
                             .map(|x| OnsenAction::Upgrade(*x as i32))
                             .collect::<Vec<_>>();
-                        let upgrade = trainer.select_action(&game, &actions, &mut rng)?;
-                        println!("{}", format!("蒙特卡洛：{}", actions[upgrade]).magenta());
+                        trainer.select_action(&game, &actions, &mut rng)?;
                     }
                 } else {
                     // 如果被解析成 Bathing 但没有温泉券合buff，就直接跳过到 Train
@@ -176,7 +182,6 @@ async fn main_guard() -> Result<()> {
 
                     let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
                     let action = actions[action_idx].clone();
-                    println!("{}", format!("蒙特卡洛: {action}").bright_green());
 
                     // 当 mcts 建议 UseTicket(false) 时，直接跳过 Bathing 阶段，继续给出训练推荐。
                     if action == OnsenAction::UseTicket(false) && game.stage == OnsenTurnStage::Bathing {
@@ -184,11 +189,11 @@ async fn main_guard() -> Result<()> {
                         let actions = game.list_actions()?;
                         if !actions.is_empty() {
                             let action_idx = trainer.select_action(&game, &actions, &mut rng)?;
-                            let action = actions[action_idx].clone();
-                            println!("{}", format!("蒙特卡洛: {action}").bright_green());
+                            //let action = actions[action_idx].clone();
                         }
                     }
                 }
+                println!("{}", "[按 F2 保存当前回合状态]".bright_black());
             }
             Err(e) => {
                 println!("{}", format!("解析回合信息出错: {e}").red());

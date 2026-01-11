@@ -7,7 +7,7 @@ use flexi_logger::{DeferredNow, Duplicate, FileSpec, style};
 use log::Record;
 use serde::Serialize;
 
-use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA, LOGGER};
+use crate::gamedata::{EventCollection, EventData, GAMECONSTANTS, GAMEDATA, GameConfig, LOGGER, OverrideGameConfig};
 
 pub type Array5 = [i32; 5];
 pub type Array6 = [i32; 6];
@@ -149,4 +149,15 @@ pub fn split_status(status_pt: &Array6) -> Result<(&Array5, i32)> {
     let left: &Array5 = status_pt[..5].try_into()?;
     let right = status_pt[5];
     Ok((left, right))
+}
+
+/// 载入 gamedata/default_config.toml, 和 game_config.toml 合并
+pub fn load_game_config() -> Result<GameConfig> {
+    let def_file = fs_err::read_to_string("gamedata/default_config.toml")?;
+    let default_config: GameConfig = toml::from_str(&def_file)?;
+    let cfg_file = fs_err::read_to_string("game_config.toml")?;
+    let override_config: OverrideGameConfig = toml::from_str(&cfg_file)?;
+    let ret = override_config.merge(&default_config);
+    //println!("{ret:#?}");
+    Ok(ret)
 }

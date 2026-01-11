@@ -238,7 +238,7 @@ impl SearchOutput {
         &self.actions[self.best_action_idx]
     }
 
-    pub fn best_action_2(&self) -> &OnsenAction {
+    pub fn best_action_pt(&self) -> &OnsenAction {
         let best_action_idx = self
             .action_results
             .iter()

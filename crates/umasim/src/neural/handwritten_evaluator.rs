@@ -21,7 +21,7 @@ use crate::{
         onsen::{OnsenOrder, action::OnsenAction, game::OnsenGame}
     },
     gamedata::{GAMECONSTANTS, GameConfig, onsen::ONSENDATA},
-    global
+    global, utils::load_game_config
 };
 
 // ============================================================================
@@ -202,8 +202,7 @@ fn should_skip_vital_penalty(game: &OnsenGame) -> bool {
 
 pub fn load_onsen_order() -> Result<OnsenOrder> {
     // 1. 先读取配置文件
-    let config_file = fs_err::read_to_string("game_config.toml")?;
-    let game_config: GameConfig = toml::from_str(&config_file)?;
+    let game_config = load_game_config()?;
     Ok(game_config.onsen_order)
 }
 

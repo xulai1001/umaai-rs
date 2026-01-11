@@ -13,7 +13,7 @@ use umasim::{
     global,
     search::SearchConfig,
     trainer::*,
-    utils::init_logger
+    utils::{init_logger, load_game_config}
 };
 /// 单次模拟结果
 struct SimulationResult {
@@ -87,8 +87,7 @@ fn run_onsen_once(
 #[tokio::main]
 async fn main() -> Result<()> {
     // 1. 先读取配置文件
-    let config_file = fs_err::read_to_string("game_config.toml")?;
-    let game_config: GameConfig = toml::from_str(&config_file)?;
+    let game_config = load_game_config()?;
 
     // 2. 根据配置初始化日志
     init_logger("analyzer", &game_config.log_level)?;

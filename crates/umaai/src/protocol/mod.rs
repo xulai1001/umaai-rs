@@ -7,7 +7,7 @@ use umasim::{
     game::{BaseGame, BasePerson, FriendOutState, FriendState, InheritInfo, SupportCard, TurnStage, Uma, UmaFlags},
     gamedata::{GAMEDATA, GameConfig},
     global,
-    utils::Array5
+    utils::{Array5, load_game_config}
 };
 
 pub mod onsen;
@@ -185,8 +185,7 @@ impl GameStatusBase {
 
     pub fn parse_inherit(&self) -> Result<InheritInfo> {
         // 1. 先读取配置文件
-        let config_file = fs_err::read_to_string("game_config.toml")?;
-        let game_config: GameConfig = toml::from_str(&config_file)?;
+        let game_config = load_game_config()?;
         Ok(InheritInfo {
             blue_count: self.zhongma_blue_count.clone(),
             extra_count: game_config.extra_count.clone()
