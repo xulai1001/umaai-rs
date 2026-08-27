@@ -8,8 +8,8 @@
 - **上限相关守门与契约测试**：新增跨三剧本的开局上限守门测试（期望值从各剧本 JSON 推导，故改代码会红、改数据不误报）、剧本基值字面量契约测试（守数据漂移，并锁两剧本基值必须不同——拉面与全局常量当前数值相同，误接全局的回归只有它能抓）、查表越界饱和测试。`expected_score_parts` 保持不调用生产查表函数，维持独立对照。修正 `eat_covered_train_gate_blocks_mismatched_ramen` 夹具写死旧上限当"满"的问题，改为从实际上限取值；三处硬守门快照基线随上限变化重抓
 - **MCTS rollout 与 fallback 切到正式推荐策略**：搜索评分原用机制残缺的策略核心，改为 `RecommendedRamenTrainer`，门控全关时与推荐策略逐位等价；`for_rollout()` 关 breakdown 采集避免线程锁争用。附两个切换验证工具
 - **搜索掉分归因**：搜索低于纯推荐策略的原因是缺省 `radical_factor_max=50` 的加权均值有效样本量恒 3.9%（与 search_n 无关），选择偏差压过搜索收益；取 rf=0 后方向反转。缺省值不动（温泉在用），由调用方指定
-- **硬守门测试基线重抓**：随 trainer 切换，4 处分数/五维/PT/searched_count 基线重抓；`test_combined_on_skips_special_search` 放宽为「多数走缓存命中」（race_turn 选 ramen 偶发重搜，检查逻辑不变）
-- **rollout 加速 −29% CPU**：复用现有 diag feature，编译期消掉 rollout 路径上 5 处 explain 类屏幕输出调用；200 局 0.48s → 0.34s，**分数逐位一致**
+- **硬守门测试基线重抓与收紧**：随 trainer 切换，4 处分数/五维/PT/searched_count 基线重抓；`test_combined_on_skips_special_search` 的重搜断言改回逐位快照 + 占比上界（先前放宽成「调用数 > 搜索数」，29 次调用搜 28 次也绿，等于没有守门）；`for_rollout` 补「与 `new()` 决策逐位相同」守门，并把 `last_year` 的锁写入一并关掉
+- **rollout 加速 −29% CPU**：复用现有 diag feature，编译期消掉 rollout 路径上 5 处 explain 类屏幕输出调用；分数逐位一致。**仅在关 diag 时生效**——`default` 含 diag，`umaai` 已 `default-features = false`，umasim 自己的 bin 需显式 `--no-default-features --features cli`
 - **perf 诊断工具与 Windows 可构建性**：新增 `sim_profiler` 定位打分链热点；pprof-rs 用 Unix API、Windows 编译不过，故收进可选 `profiler` feature 不进 default。`microbench_top_fns` 加 `#[ignore]`——它改进程级 CWD，与并行测试互相污染
 
 ## 2026-08-26

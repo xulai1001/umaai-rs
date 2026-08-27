@@ -1586,7 +1586,11 @@ impl LocalRamenTrainer {
 pub struct RecommendedRamenTrainer {
     years: [LocalRamenTrainer; 3],
     /// 最近一次调用落在哪一年的策略，用于把对应 breakdown 暴露给 LoggingTrainer。
-    last_year: Mutex<Option<usize>>
+    last_year: Mutex<Option<usize>>,
+    /// 是否记录 `last_year`。rollout 下关闭：24 线程共享同一实例，每次决策都抢同
+    /// 一把 `Mutex`，而 `last_year` 的唯一读者是 [`Trainer::last_breakdown`]，
+    /// 该场景下三份年策略的 `collect_breakdown` 也已关闭、必然返回 `None`。
+    record_last_year: bool
 }
 
 impl RecommendedRamenTrainer {
@@ -1695,7 +1699,8 @@ impl RecommendedRamenTrainer {
             // 30→40 总加权 +318；45 回落——门限过高休息过多）；吃面回合仅第三年放掉
             // （Y3 fail_rate_drop=100% 必成），第一/二年保留 40（Y1/Y2 吃面训练仍可能失败）。
             years: [make(16.0, 40, 40), make(64.0, 40, 40), make(64.0, 40, 0)],
-            last_year: Mutex::new(None)
+            last_year: Mutex::new(None),
+            record_last_year: true
         }
     }
 
@@ -1710,6 +1715,9 @@ impl RecommendedRamenTrainer {
         for year in trainer.years.iter_mut() {
             year.collect_breakdown = false;
         }
+        // 连 last_year 的写入一并关掉：只关 collect_breakdown 的话，三个 select_*
+        // 每次决策仍会锁同一把 Mutex，「避免锁争用」只做了一半。
+        trainer.record_last_year = false;
         trainer
     }
 
@@ -1733,16 +1741,20 @@ impl Default for RecommendedRamenTrainer {
 impl Trainer<RamenGame> for RecommendedRamenTrainer {
     fn select_action(&self, game: &RamenGame, actions: &[RamenAction], rng: &mut StdRng) -> Result<usize> {
         let year = Self::year(game);
-        if let Ok(mut slot) = self.last_year.lock() {
-            *slot = Some(year);
+        if self.record_last_year {
+            if let Ok(mut slot) = self.last_year.lock() {
+                *slot = Some(year);
+            }
         }
         self.years[year].select_action(game, actions, rng)
     }
 
     fn select_choice(&self, game: &RamenGame, choices: &[Vec<EventChoice>], rng: &mut StdRng) -> Result<usize> {
         let year = Self::year(game);
-        if let Ok(mut slot) = self.last_year.lock() {
-            *slot = Some(year);
+        if self.record_last_year {
+            if let Ok(mut slot) = self.last_year.lock() {
+                *slot = Some(year);
+            }
         }
         self.years[year].select_choice(game, choices, rng)
     }
@@ -1751,8 +1763,10 @@ impl Trainer<RamenGame> for RecommendedRamenTrainer {
         &self, game: &RamenGame, event: &EventData, choices: &[Vec<EventChoice>], rng: &mut StdRng
     ) -> Result<usize> {
         let year = Self::year(game);
-        if let Ok(mut slot) = self.last_year.lock() {
-            *slot = Some(year);
+        if self.record_last_year {
+            if let Ok(mut slot) = self.last_year.lock() {
+                *slot = Some(year);
+            }
         }
         self.years[year].select_event_choice(game, event, choices, rng)
     }
@@ -1930,6 +1944,63 @@ mod tests {
             panic!("for_rollout 实例不应采集 breakdown，实际: {bd:?}");
         }
         Ok(())
+    }
+
+    /// `RecommendedRamenTrainer::for_rollout()` 只许省掉观测开销，不许改决策。
+    ///
+    /// 它关掉两样东西——三份年策略的 `collect_breakdown`、以及 `last_year` 的
+    /// `Mutex` 写入。两者的唯一读者都是 [`Trainer::last_breakdown`]，决策链
+    /// （`choose` / `select_*`）不消费任何一个，所以整局必须逐位相同。
+    /// 这条守门存在的意义：将来若有人把某个字段挪进决策路径，这里会红。
+    #[test]
+    fn recommended_for_rollout_decisions_identical() -> Result<()> {
+        use crate::{
+            bench::seeded_rngs,
+            game::{InheritInfo, ramen::RamenGame, traits::Game},
+            gamedata::init_global,
+            utils::{Checks, get_workspace_root, init_test_logger}
+        };
+
+        let workspace_root = get_workspace_root()?;
+        std::env::set_current_dir(workspace_root)?;
+        let _ = init_test_logger("error");
+        let _ = init_global();
+
+        const DECK: [u32; 6] = [302424, 302894, 303044, 302924, 303024, 303054];
+        let inherit =
+            InheritInfo { blue_count: [15, 0, 0, 0, 3], extra_count: [10, 10, 20, 20, 20, 40] };
+
+        // 同一 base_seed / run_idx ⇒ 决策 RNG 与规则 RNG 都逐位相同
+        let mut run = |rollout: bool| -> Result<(i32, [i32; 5], i32, bool)> {
+            let (mut rng, rule_master) = seeded_rngs(61444, 0);
+            let mut game = RamenGame::newgame(102601, &DECK, inherit.clone())?;
+            game.set_rule_master(rule_master);
+            let trainer = if rollout {
+                RecommendedRamenTrainer::for_rollout()
+            } else {
+                RecommendedRamenTrainer::new()
+            };
+            game.run_full_game(&trainer, &mut rng)?;
+            Ok((
+                game.uma.calc_score(),
+                game.uma.five_status,
+                game.uma.skill_pt,
+                trainer.last_breakdown().is_some()
+            ))
+        };
+
+        let (s_n, f_n, p_n, bd_n) = run(false)?;
+        let (s_r, f_r, p_r, bd_r) = run(true)?;
+        println!("new():        评分={s_n} 五维={f_n:?} PT={p_n} 有 breakdown={bd_n}");
+        println!("for_rollout(): 评分={s_r} 五维={f_r:?} PT={p_r} 有 breakdown={bd_r}");
+
+        let mut c = Checks::new();
+        c.check(s_n == s_r, "整局评分逐位相同");
+        c.check(f_n == f_r, "整局五维逐位相同");
+        c.check(p_n == p_r, "整局技能点逐位相同");
+        c.check(bd_n, "new() 仍暴露 breakdown（决策日志依赖）");
+        c.check(!bd_r, "for_rollout() 不暴露 breakdown（rollout 无消费者）");
+        c.finish()
     }
 
     /// 正式 preset 必须使用 v44 同种子回归胜出的友人跨年节奏。

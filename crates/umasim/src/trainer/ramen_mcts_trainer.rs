@@ -917,7 +917,12 @@ mod tests {
         // 2026-08-25 更新：不在判定与得意率解耦 + 地区分身缺席优先，模拟数值变化，基准重抓
         // 2026-08-27 更新（两次叠加）：
         // (1) 五维上限剧本化，速度上限 2958→3337，整局数值变化；
-        // (2) fallback 与 rollout 均切到 RecommendedRamenTrainer，gate-off 即纯推荐策略跑局。
+        // (2) fallback 与 rollout 均切到 RecommendedRamenTrainer。
+        //     ⚠ gate-off **不是**纯推荐策略跑局——本测试用 ramen_and_special_stages()，
+        //     ramen/special 两阶段仍在搜（searched_count=66），只是不合并成单动作。
+        //     纯推荐策略的对照在 test_stages_none_matches_recommended（stages=none，
+        //     searched_count=0），同卡组 seed=42 的纯推荐快照见 bench.rs 的 64336。
+        //     别拿这里的 62698 当 REC 基线，会误判搜索掉分幅度。
         // 上游 (2) 抓的 66705 / [3258,...] 是在 (1) 之前测的，两者叠加后已在本分支重抓。
         c.check(score == 62698, "评分与改动前逐位相同");
         c.check(
@@ -1063,9 +1068,16 @@ mod tests {
         c.check(ramen_calls > 0, "RamenSelect 被调用过");
         c.check(ramen_searches > 0, "RamenSelect 走过搜索");
         c.check(special_calls > 0, "SpecialSelect 被调用过（缓存命中路径）");
+        // 2026-08-28 收紧：原断言 `special_calls > special_searches` 在 29 次调用里
+        // 搜 28 次也绿，等于没有守门。合并路径整个失效都抓不住。
+        // 改回本文件通行的逐位快照：29 次调用只有 1 次重搜（第 3 年 race_turn 选面，
+        // `select_action` 的合并短路 `!game.is_race_turn()` 不成立，见本文件 495-547）。
+        c.check(special_calls == 29, "SpecialSelect 调用数与改动前逐位相同");
+        c.check(special_searches == 1, "SpecialSelect 重搜数与改动前逐位相同");
+        // 再留一条与具体数字解耦的语义上界，防止将来重抓快照时把比例抬上去
         c.check(
-            special_calls > special_searches,
-            "SpecialSelect 大多数走缓存命中（race_turn 选 ramen 偶发重搜不计）"
+            special_searches * 5 < special_calls,
+            "SpecialSelect 绝大多数走缓存命中（重搜占比 < 20%）"
         );
         c.check(
             searched == ramen_searches + special_searches,
