@@ -31,6 +31,26 @@
 //! - **人头下标 ≠ 卡组下标**：拉面的 `init_persons` 只放 5 张训练卡再追加理事长，
 //!   友人卡到回合 2 才加入，于是理事长占人头 5、友人卡占人头 6，而 `deck[5]` 是友人卡。
 //!   cards 段与 persons 段之间的互相引用一律按 `card_id` 反查，不假设两个序列同序。
+//! - **组合类内容展开编码而非编 id**：地区段展开 `xunlian/youqing/at_trains`，
+//!   超级拉面限制选项同理展开成合法训练位 multi-hot——泛化到没见过的组合，
+//!   数据表调整时不改代码。
+//!
+//! # 超级拉面维度（schema v2）
+//!
+//! 原 v1 只编码「选了第几个选项」（one-hot）与「选没选」（flag），有两处盲区：
+//! 选中的限制选项**允许哪些训练位**只能靠网络背 id→内容表，且「已选但尚未到
+//! 72 回合生效」与「正在生效」无法区分。v2 在 `ramen` 块追加：
+//!
+//! - 1 维 `super_window`：`turn ∈ [72,77]`（[`RamenGame::is_super_ramen_turn`]）；
+//! - [`TRAIN_NUM`] 维「已选选项的合法训练位」multi-hot（自
+//!   `RAMENDATA.finals_effect.training_limit_options` 展开；未选时整组为 0，
+//!   由既有的 `is_some` flag 区分「没选」与「选了但不覆盖该位」）。
+//!
+//! 决策时刻（`SuperRamenSelect` 三候选采样）不依赖新维度区分候选：由样本导出方
+//! 把候选下标临时写入 `ramen.super_ramen` 后调用本函数，既有 one-hot 即可承载；
+//! 该字段在数据里是纯位置下标、无 option ID 概念，写入-恢复对状态无副作用。
+//!
+//! **维度变更使已落盘的教师数据作废**：重新采数或给旧样本打 v1 标记后方可混用。
 //!
 //! # 已知未覆盖
 //!
@@ -71,7 +91,9 @@ const G_FLAGS: usize = 9;
 /// global 段：训练设施
 const G_FACILITY: usize = 6;
 /// global 段：剧本状态
-const G_RAMEN: usize = 18;
+///
+/// = 18（v1）+ 1 超级拉面生效窗口 flag + [`TRAIN_NUM`] 限制选项合法位 multi-hot。
+const G_RAMEN: usize = 24;
 /// global 段：诀窍角标
 const G_MARK: usize = 16;
 /// global 段：友人
@@ -368,6 +390,24 @@ fn encode_global(game: &RamenGame, w: &mut FeatureWriter) -> Result<()> {
         w.num(r.train_level_bonus, SCALE_TRAIN_LEVEL_BONUS);
         w.onehot(r.super_ramen, SUPER_RAMEN_NUM);
         w.flag(r.super_ramen.is_some());
+        // —— schema v2 新增（处理上游合并时的 fixme）——
+        // 1) 生效窗口：「已选但未生效」与「72-77 正在生效」由此位区分；
+        w.flag(game.is_super_ramen_turn());
+        // 2) 已选限制选项的合法训练位 multi-hot：网络直接读内容而不用背 id→内容表，
+        //    数据表调整（training_limit_options）时无需改代码。未选时整组 0，
+        //    由上面的 is_some 区分「没选」。下标查表失败属于数据异常，报错不静默补 0。
+        match r.super_ramen {
+            Some(opt) => {
+                let data = global!(RAMENDATA);
+                let slots = data
+                    .finals_effect
+                    .training_limit_options
+                    .get(opt)
+                    .ok_or_else(|| anyhow::anyhow!("超级拉面选项缺失: opt={opt}"))?;
+                w.multihot(slots.iter().filter_map(|&t| usize::try_from(t).ok()), TRAIN_NUM);
+            }
+            None => w.zeros(TRAIN_NUM)
+        }
         w.num(r.eat_count, SCALE_EAT);
         w.flag(game.deck_can_split);
         Ok(())
@@ -792,9 +832,11 @@ mod tests {
         c.finish()
     }
 
-    /// P0.5：`STAGE_NUM` 预留空槽后 `INPUT_DIM == 754`，且大于 `RamenStage` 实际变体数
+    /// P0.5：`STAGE_NUM` 预留空槽后仍大于 `RamenStage` 实际变体数
     ///
     /// 槽 10 已分给 `BeginAfterRegionSelect`，还剩 1 个空槽。
+    /// schema v2：超级拉面补「生效窗口 + 限制位 multi-hot」各 1/5 维后
+    /// `INPUT_DIM` 从 754 升到 760。
     #[test]
     fn test_stage_num_reserve_slots() -> Result<()> {
         let n_stage = enum_iterator::cardinality::<RamenStage>();
@@ -804,7 +846,8 @@ mod tests {
         println!("GLOBAL_DIM = {GLOBAL_DIM}");
         println!("INPUT_DIM = {INPUT_DIM}");
         let mut c = Checks::new();
-        c.check(INPUT_DIM == 754, "填预留槽后 INPUT_DIM 必须仍为 754");
+        c.check(INPUT_DIM == 760, "schema v2（超级拉面 +6 维）后 INPUT_DIM 必须为 760");
+        c.check(G_RAMEN == 24, "ramen 块应为 v1 的 18 + 1 窗口 + 5 multi-hot = 24");
         c.check(
             STAGE_NUM > n_stage,
             &format!("STAGE_NUM={STAGE_NUM} 必须大于 RamenStage 变体数 {n_stage}（还剩 1 个空槽）")
@@ -954,8 +997,8 @@ mod tests {
             unset.ramen.selected_regions,
             unset.ramen.yearly_selected_regions
         );
-        c.check(v_unset.len() == INPUT_DIM, "y1 RegionSelect 根特征长度 == INPUT_DIM(754)");
-        c.check(INPUT_DIM == 754, "INPUT_DIM 仍为 754");
+        c.check(v_unset.len() == INPUT_DIM, "y1 RegionSelect 根特征长度 == INPUT_DIM(760)");
+        c.check(INPUT_DIM == 760, "schema v2 下 INPUT_DIM 为 760");
 
         let mut set = unset.clone();
         set.ramen.selected_regions = [0, 1, 2];
@@ -995,6 +1038,51 @@ mod tests {
             println!("槽距 {gap}（期望 10）");
             c.check(gap == 10, "BeginAfterRegionSelect 使用预留槽 10");
         }
+        c.finish()
+    }
+
+    /// schema v2：超级拉面的窗口位与限制位 multi-hot 必须真的进特征
+    ///
+    /// 设 `super_ramen = Some(选项二)` 且 turn=72（生效窗口内）：相对未选状态应恰好
+    /// 变化 `1(onehot 选项位) + 1(is_some) + 1(窗口) + len(选项二合法位)` 位。
+    /// 选项二数据为 [0,1,2,4]，共 4 位合法 → 恰好 7 位变化。专防 v2 两处盲区回归。
+    #[test]
+    fn test_super_ramen_v2_dims_reach_features() -> Result<()> {
+        std::env::set_current_dir(get_workspace_root()?)?;
+        let _ = init_test_logger("error");
+        let _ = init_global();
+
+        let base_game = make_game()?;
+        let base = encode(&base_game)?;
+
+        let mut chosen = base_game.clone();
+        chosen.base.turn = 72; // 生效窗口内
+        chosen.ramen.super_ramen = Some(1); // 选项二（FIXED_SUPER_RAMEN_INDEX 同款位置语义）
+        let after = encode(&chosen)?;
+
+        let diffs: Vec<usize> = base
+            .iter()
+            .zip(after.iter())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        println!("选中选项二(turn=72) 变化的特征下标({}): {diffs:?}", diffs.len());
+
+        let mut c = Checks::new();
+        c.check(diffs.len() == 7, "应恰好 7 位变化：onehot(1)+is_some(1)+窗口(1)+multi-hot(4)");
+        c.check(chosen.is_super_ramen_turn(), "turn=72 应判定为生效窗口");
+
+        // 未选 + 非窗口：新增 6 维必须全部为 0（基线局面即如此）
+        let new_dims_all_zero = base
+            .iter()
+            .skip(GLOBAL_DIM - 0) // 全向量扫描下方的 ramen 块新增段即可，简化为逐位检查
+            .count(); // 占位避免 unused；真实检查放在下方显式区间
+        let _ = new_dims_all_zero;
+        let ramen_new_start = GLOBAL_DIM - G_REGION - G_RACE - G_FRIEND - G_MARK - G_RAMEN + 13; // 块内第 14 位起为 v2 段
+        let v2_slice = &base[ramen_new_start..ramen_new_start + 1 + TRAIN_NUM];
+        println!("未选状态下 v2 六维 = {v2_slice:?}");
+        c.check(v2_slice.iter().all(|&x| x == 0.0), "未选超级拉面时 v2 六维应全 0");
         c.finish()
     }
 }

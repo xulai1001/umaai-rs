@@ -2,11 +2,16 @@
 members = ["crates/umasim", "crates/umaai"]
 resolver = "2"
 
+# 性能档（2026-08-27，本 workbench 决策）：原为 opt-level='z'+lto=false 的体积最小档，
+# 对批量育成模拟是 2~4× 的白给减速。改为速度档三件套。
+# 可复现性说明：rustc 不做浮点重结合（无 fast-math），opt/lto/codegen-units 不改变
+# 任何整数/浮点求值结果——配对闸门的位级一致性不受影响；CI 中 candidate 与
+# 上游基线在同一工作区配置下分别重编，口径天然对齐。
 [profile.release]
-opt-level = 'z'
+opt-level = 3
 debug = true
-codegen-units = 16
-lto = false
+codegen-units = 1
+lto = "thin"
 
 [workspace.dependencies]
 umasim = { path = "crates/umasim" }
@@ -27,7 +32,7 @@ indicatif = "0.18.1"
 log = "0.4.28"
 notify = "8.2.0"
 rand = { version = "0.9.2", features = ["serde", "std_rng"] }
-rand_distr = { version = "0.5.1", features = ["serde"] }
+rand_distr = "0.5.1"
 rayon = "1.11.0"
 #salvo = "0.84.2"
 serde = { version = "1.0.228", features = ["derive"] }

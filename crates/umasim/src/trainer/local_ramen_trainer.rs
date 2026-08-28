@@ -19,15 +19,19 @@ use crate::{
             effects::calc_ramen_training_effect,
             policy::{RamenPolicy, RamenPolicyConfig, RamenPolicyOutput},
             rules::{
-                calc_ramen_pt_gain, calc_region_bonus, consume_for_ramen, get_recipe, get_turn_special_feeling,
+                calc_ramen_pt_gain,
+                calc_region_bonus,
+                consume_for_ramen,
+                get_recipe,
+                get_turn_special_feeling,
                 list_special_targets_for
             }
         }
     },
     gamedata::{EventChoice, EventData, GAMECONSTANTS, ramen::RAMENDATA},
-    global
+    global,
+    trainer::ramen_handwritten_trainer::ramen_effective_stage
 };
-use crate::trainer::ramen_handwritten_trainer::ramen_effective_stage;
 
 #[derive(Debug, Clone)]
 pub struct LocalRamenConfig {
@@ -166,7 +170,6 @@ pub struct LocalRamenConfig {
     /// 配置 token `weakboost150` 对应 `1.50`。
     pub ramen_weak_train_boost: f32,
 
-
     /// 隐藏风味饥饿加成权重，单位为策略评分/缺口点。
     ///
     /// 友人外出固定 +2 隐藏风味（上限 4，见 `RamenGame::do_friend_outing`）。
@@ -197,7 +200,6 @@ pub struct LocalRamenConfig {
     /// 完链"的收益——体力正常/高时也愿意用，而不是等饥饿或被迫休息。
     /// `0.0` 关闭。配置 token `pro150` 对应 `150.0`。
     pub friend_proactive_weight: f32,
-
 
     /// 吃面必成价值权重，无量纲。
     ///
@@ -611,10 +613,7 @@ impl LocalRamenTrainer {
             let gap_bonus = self.config.status_gap_strength * (leading - completion[i]).max(0.0);
             let near_cap = ((completion[i] - 0.70) / 0.30).clamp(0.0, 1.0);
             let excess_cards = (g.card_type_count[i] - 2).max(0) as f32;
-            let overflow = self.config.status_overflow_strength
-                * near_cap
-                * near_cap
-                * (1.0 + 0.5 * excess_cards);
+            let overflow = self.config.status_overflow_strength * near_cap * near_cap * (1.0 + 0.5 * excess_cards);
             let multiplier = (1.0 + gap_bonus - overflow).clamp(0.10, 2.00);
             adjustment += exact_margin * (multiplier - 1.0);
         }
@@ -647,7 +646,13 @@ impl LocalRamenTrainer {
         }
         // 默认 (=0.0) 启用按 build 自适应查表（推荐 preset 默认行为）
         let w = g.card_type_count[4];
-        if w <= 1 { 5.0 } else if w == 2 { 0.0 } else { 2.0 }
+        if w <= 1 {
+            5.0
+        } else if w == 2 {
+            0.0
+        } else {
+            2.0
+        }
     }
 
     fn vital_factor(t: i32) -> f32 {
@@ -668,7 +673,6 @@ impl LocalRamenTrainer {
     fn friend_hidden_not_overflow(&self, g: &RamenGame) -> bool {
         g.ramen.special_feeling <= 2
     }
-
 
     /// 下一段友人外出的动态价值。
     ///
@@ -817,7 +821,22 @@ impl LocalRamenTrainer {
     }
 
     fn decide_train(&self, g: &RamenGame, a: &[RamenAction]) -> Result<(usize, Vec<RamenPolicyOutput>)> {
-        let (mut guard, mut out) = self.policy.decide_train(g, a)?;
+        // 吃面后“必须训练”是候选集硬约束，不能只在基础策略触发休息/外出守门时补救。
+        // 否则健康局面会走完整候选打分，休息、比赛和外出仍可能在吃面后胜出。
+        let force_train = self.config.eat_requires_training && g.ramen.current_ramen.is_some();
+        let (mut guard, mut out) = if force_train {
+            let out = self.policy.score_train_actions(g, a)?;
+            let guard = out
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| a.get(*i).is_some_and(|x| matches!(x.operation, Operation::Train(_))))
+                .max_by(|(li, l), (ri, r)| l.score.total_cmp(&r.score).then_with(|| ri.cmp(li)))
+                .map(|(i, _)| i)
+                .ok_or_else(|| anyhow::anyhow!("已吃面但 Train 阶段没有训练候选"))?;
+            (guard, out)
+        } else {
+            self.policy.decide_train(g, a)?
+        };
         let recovery_guard = self.config.friend_outing_replaces_rest
             && a.get(guard).is_some_and(|x| x.operation == Operation::Rest)
             && out.len() != a.len();
@@ -827,23 +846,9 @@ impl LocalRamenTrainer {
             guard = a.iter().position(|x| x.operation == Operation::Rest).unwrap_or(guard);
         }
         if out.len() != a.len() {
-            let ate_this_turn = self.config.eat_requires_training && g.ramen.current_ramen.is_some();
-            let selected_is_train = a
-                .get(guard)
-                .is_some_and(|action| matches!(action.operation, Operation::Train(_)));
-            if !ate_this_turn || selected_is_train {
-                return Ok((guard, out));
-            }
-            // 已吃面但旧硬守门想休息/外出：重新计算全部候选，并只允许五种训练。
-            // 生病/自选比赛通常不会经过吃面前门控；这里仍以“拉面只为训练使用”为最终不变量。
-            out = self.policy.score_train_actions(g, a)?;
-            let _ = out
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| a.get(*i).is_some_and(|x| matches!(x.operation, Operation::Train(_))))
-                .max_by(|(li, l), (ri, r)| l.score.total_cmp(&r.score).then_with(|| ri.cmp(li)))
-                .map(|(i, _)| i)
-                .ok_or_else(|| anyhow::anyhow!("已吃面但 Train 阶段没有训练候选"))?;
+            // 未吃面时保留基础策略的生病/体力/心情/比赛守门。
+            // 吃面后的 force_train 路径已在函数入口展开完整候选，因此不会进入这里。
+            return Ok((guard, out));
         }
         if let Some(friend_idx) = a.iter().position(|x| x.operation == Operation::FriendOuting) {
             let (score, breakdown, reason) = self.dynamic_friend_outing_value(g)?;
@@ -854,7 +859,16 @@ impl LocalRamenTrainer {
             }
         }
         let base = out.iter().map(|x| x.score).collect::<Vec<_>>();
-        let bb = Self::choose(&out);
+        let choose_allowed = |scores: &[RamenPolicyOutput]| -> Result<usize> {
+            scores
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !force_train || a.get(*i).is_some_and(|x| matches!(x.operation, Operation::Train(_))))
+                .max_by(|(li, l), (ri, r)| l.score.total_cmp(&r.score).then_with(|| ri.cmp(li)))
+                .map(|(i, _)| i)
+                .ok_or_else(|| anyhow::anyhow!("当前候选集中没有合法动作"))
+        };
+        let bb = choose_allowed(&out)?;
         let ph = Self::phase(g.turn());
         for (act, o) in a.iter().zip(out.iter_mut()) {
             let Operation::Train(tt) = act.operation else { continue };
@@ -955,10 +969,7 @@ impl LocalRamenTrainer {
             // 策略在彩圈/羁绊/属性缺口占优时仍倾向兑现吃面成本。
             if self.config.ramen_train_coupling_weight > 0.0 {
                 if let Some(rid) = g.ramen.current_ramen {
-                    if let Some(region) = RAMENDATA
-                        .get()
-                        .and_then(|d| d.ramen_region_effect.get(rid))
-                    {
+                    if let Some(region) = RAMENDATA.get().and_then(|d| d.ramen_region_effect.get(rid)) {
                         if region.at_trains.contains(&(tt as i32)) {
                             let effect = (region.xunlian + region.youqing + region.pt_bonus) as f32
                                 + region.hint_count as f32 * 10.0;
@@ -979,18 +990,12 @@ impl LocalRamenTrainer {
             let weak_boost = Self::effective_weak_boost(g, self.config.ramen_weak_train_boost);
             if weak_boost > 0.0 {
                 let tr = tt as usize;
-                if g.card_type_count[tr] <= 1
-                    && g.uma.five_status[tr] < g.uma.five_status_limit[tr]
-                {
+                if g.card_type_count[tr] <= 1 && g.uma.five_status[tr] < g.uma.five_status_limit[tr] {
                     if let Some(rid) = g.ramen.current_ramen {
-                        if let Some(region) = RAMENDATA
-                            .get()
-                            .and_then(|d| d.ramen_region_effect.get(rid))
-                        {
+                        if let Some(region) = RAMENDATA.get().and_then(|d| d.ramen_region_effect.get(rid)) {
                             if region.at_trains.contains(&(tt as i32)) {
                                 let effect = (region.youqing + region.xunlian) as f32;
-                                let weight = weak_boost
-                                    * (2.0 - g.card_type_count[tr] as f32);
+                                let weight = weak_boost * (2.0 - g.card_type_count[tr] as f32);
                                 let bonus = effect * weight;
                                 o.score += bonus;
                                 o.add("ramen_weak_train_boost", bonus);
@@ -1000,7 +1005,7 @@ impl LocalRamenTrainer {
                 }
             }
         }
-        let lb = Self::choose(&out);
+        let lb = choose_allowed(&out)?;
         let sacrifice = base[bb] - base[lb];
         let mut c = if sacrifice <= self.config.max_base_score_sacrifice {
             lb
@@ -1206,12 +1211,14 @@ impl LocalRamenTrainer {
             // 时强制 override（实验用），≤0 则走查找表（推荐 preset）。
             // 未满条件与 `decide_train` 弱位 boost 一致：已满位无属性培养价值，放大只会虚高。
             let weak_boost = Self::effective_weak_boost(g, self.config.ramen_weak_train_boost);
-            let weak_mult =
-                if weak_boost > 0.0 && g.card_type_count[tr] <= 1 && g.uma.five_status[tr] < g.uma.five_status_limit[tr] {
-                    weak_boost
-                } else {
-                    1.0
-                };
+            let weak_mult = if weak_boost > 0.0
+                && g.card_type_count[tr] <= 1
+                && g.uma.five_status[tr] < g.uma.five_status_limit[tr]
+            {
+                weak_boost
+            } else {
+                1.0
+            };
             best = best.max(raw * weak_mult + people * 8.0 + shining * 35.0);
         }
         let effect = (region.xunlian + region.youqing + region.pt_bonus) as f32 + region.hint_count as f32 * 10.0;
@@ -1469,9 +1476,7 @@ impl LocalRamenTrainer {
             if let Some(region_id) = act.ramen {
                 // 吃面后必训练 at_trains 覆盖位（C 方案简化约束）：预演该面落地后的最优训练位，
                 // 若不在 at_trains 内则否决（吃面加成浪费——玩家 87% 覆盖 vs 自动 52%）。
-                if self.config.eat_requires_covered_train
-                    && !self.eat_covered_train_passes(g, region_id)?
-                {
+                if self.config.eat_requires_covered_train && !self.eat_covered_train_passes(g, region_id)? {
                     o.score = f32::NEG_INFINITY;
                     o.reason = "禁止吃面：吃完后最优训练位不在该面 at_trains 内".to_string();
                     o.add("eat_covered_train_gate", f32::NEG_INFINITY);
@@ -1595,17 +1600,9 @@ impl RecommendedRamenTrainer {
     /// 吃面事务门、体力硬门、友人 0/2/5 节奏、动态事件、隐藏风味等结构逻辑
     /// 均逐字继承 `new()`，防止实验候选混入未声明的策略差异。
     pub fn with_experiment_overrides(
-        pt_rates: [f32; 3],
-        gap_strength: f32,
-        overflow_strength: f32,
-        max_base_score_sacrifice: f32,
-        ramen_window_weight: f32,
-        status_reserve_max: f32,
-        early_bond_value: f32,
-        hint_bonus: f32,
-        weakboost: f32,
-        region_weak_cover_weight: f32,
-        eat_requires_covered_train: bool,
+        pt_rates: [f32; 3], gap_strength: f32, overflow_strength: f32, max_base_score_sacrifice: f32,
+        ramen_window_weight: f32, status_reserve_max: f32, early_bond_value: f32, hint_bonus: f32, weakboost: f32,
+        region_weak_cover_weight: f32, eat_requires_covered_train: bool
     ) -> Self {
         let mut trainer = Self::new();
         for (year, pt_rate) in trainer.years.iter_mut().zip(pt_rates) {
@@ -1672,7 +1669,9 @@ impl RecommendedRamenTrainer {
             local.eat_requires_training = true;
             // 吃面后必训练 at_trains 覆盖位（C 方案简化约束）：选面时预演"吃完练哪个位"，
             // 确保吃面加成不被浪费（玩家 87% 覆盖 vs 自动 52%，见 issues.md 对应条目）。
-            local.eat_requires_covered_train = true;
+            // “对应训练”只作为 coupling/weak boost 软权重；除吃后必训外，其余交给搜索。
+            // 不再用 NEG_INFINITY 强制必须点 at_trains 覆盖位。
+            local.eat_requires_covered_train = false;
             // 第三年回合级体力门禁（workbench_improve_1 §2）：吃面前软目标 25、
             // 训练后硬底线 15（非智）、缺口软成本 0.5/点——防吃面打空体力后
             // 下回合被迫休息/失败；turn≥70 由有马 +40 / 超级拉面 +20 接管。
@@ -1826,9 +1825,8 @@ impl Trainer<RamenGame> for LocalRamenTrainer {
 mod tests {
     use anyhow::Result;
 
-    use crate::game::{Game, Trainer};
-
     use super::{LocalRamenConfig, LocalRamenTrainer, RamenPolicyConfig, RecommendedRamenTrainer};
+    use crate::game::{Game, Trainer};
 
     /// 第1年地区选择（turn 2 在 run_begin 内联触发、stage=Begin）必须走 decide_region 打分。
     ///
@@ -1854,11 +1852,10 @@ mod tests {
         let _ = init_global();
 
         let trainer = RecommendedRamenTrainer::new();
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         game.base.turn = 2; // 第1年地区选择（run_begin 内联触发）
         let actions: Vec<RamenAction> = get_region_combinations(0)?
             .iter()
@@ -1905,11 +1902,10 @@ mod tests {
         let _ = init_test_logger("error");
         let _ = init_global();
 
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         game.base.turn = 2;
         let actions = vec![RamenAction::no_ramen(Operation::RegionSelect([0, 1, 2]))];
         let mut rng = StdRng::seed_from_u64(42);
@@ -1948,6 +1944,67 @@ mod tests {
         }
     }
 
+    /// 吃面后必训必须作用于完整候选路径：即使休息分数被抬到极高，最终也只能选训练。
+    #[test]
+    #[allow(clippy::panic)]
+    fn eat_requires_training_filters_all_non_train_actions() -> Result<()> {
+        use rand::{SeedableRng, prelude::StdRng};
+
+        use crate::{
+            game::{
+                InheritInfo,
+                ramen::{Operation, RamenGame, RamenStage}
+            },
+            gamedata::init_global,
+            utils::{get_workspace_root, init_test_logger}
+        };
+
+        let workspace_root = get_workspace_root()?;
+        std::env::set_current_dir(workspace_root)?;
+        let _ = init_test_logger("error");
+        let _ = init_global();
+
+        let mut policy = RamenPolicyConfig::default();
+        policy.vital_rest = 0;
+        policy.vital_rest_eating = 0;
+        policy.rest_base = 1_000_000.0;
+        let mut local = LocalRamenConfig::default();
+        local.eat_requires_training = true;
+        let trainer = LocalRamenTrainer::with_configs(policy, local);
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
+        game.base.turn = 12;
+        game.stage = RamenStage::Train;
+        game.ramen.current_ramen = Some(0);
+        let actions = game.list_actions()?;
+        let mut rng = StdRng::seed_from_u64(42);
+        let idx = trainer.select_action(&game, &actions, &mut rng)?;
+        if !matches!(actions[idx].operation, Operation::Train(_)) {
+            panic!("吃面后必须从五种训练中选择，实际为 {:?}", actions[idx].operation);
+        }
+        Ok(())
+    }
+
+    /// 正式 preset 只保留吃后必训硬约束；对应训练通过权重上浮，不使用覆盖位硬门。
+    #[test]
+    #[allow(clippy::panic)]
+    fn recommended_uses_soft_covered_train_preference() {
+        let trainer = RecommendedRamenTrainer::new();
+        for (year, t) in trainer.years.each_ref().iter().enumerate() {
+            if !t.config.eat_requires_training {
+                panic!("year{year} 未启用吃面后必训");
+            }
+            if t.config.eat_requires_covered_train {
+                panic!("year{year} 不应启用 at_trains 覆盖位硬门");
+            }
+            if t.config.ramen_train_coupling_weight <= 0.0 {
+                panic!("year{year} 应通过 coupling 对对应训练做软加权");
+            }
+        }
+    }
+
     /// 吃面-训练联动：当前吃面覆盖速位时，速训练候选获得显式 `ramen_train_coupling` 加分，
     /// 非覆盖位不加。`calc_training_value` 的隐含加成之外，策略应倾向兑现吃面成本。
     #[test]
@@ -1970,11 +2027,10 @@ mod tests {
         let mut local = LocalRamenConfig::default();
         local.ramen_train_coupling_weight = 1.0;
         let trainer = LocalRamenTrainer::with_configs(RamenPolicyConfig::default(), local);
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         game.ramen.current_ramen = Some(10); // 札幌-速 at_trains=[0]，youqing=50
         let mut preview = game.clone();
         preview.stage = RamenStage::Train;
@@ -2032,11 +2088,10 @@ mod tests {
         let mut local = LocalRamenConfig::default();
         local.friend_hidden_starve_weight = 15.0;
         let trainer = LocalRamenTrainer::with_configs(RamenPolicyConfig::default(), local);
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
 
         // 饥饿：special=0，无近期固定发放 → starve ≈ 4×15 = 60
         game.ramen.special_feeling = 0;
@@ -2102,11 +2157,10 @@ mod tests {
         local_off.ramen_window_weight = 0.10;
         let _off = LocalRamenTrainer::with_configs(policy, local_off);
 
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         // year2 中期，体力充足：pre_action 应倾向训练
         // turn 12：无自选比赛（race_grades[12]=0），训练为唯一最佳动作，避免比赛干扰门控断言
         game.base.turn = 12;
@@ -2136,7 +2190,10 @@ mod tests {
             preview.ramen.clear_pending();
             let acts = preview.list_actions()?;
             let (idx, outs) = on.decide_train(&preview, &acts)?;
-            println!("局面B 智面落地最优: {:?} score={:.1}", acts[idx].operation, outs[idx].score);
+            println!(
+                "局面B 智面落地最优: {:?} score={:.1}",
+                acts[idx].operation, outs[idx].score
+            );
         }
         let pass_rid4_b = on.eat_covered_train_passes(&game, 4)?;
         let pass_rid0_b = on.eat_covered_train_passes(&game, 0)?;
@@ -2175,11 +2232,10 @@ mod tests {
         local.eat_guarantee_weight = 1.0;
         let trainer = LocalRamenTrainer::with_configs(policy, local);
 
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         // 用无自选比赛候选的回合（can_self_race 需 turn>12）：
         // 本测试要验证的是「低体力训练失败率>0 → 吃面必成价值>0」这一机制，
         // 而非比赛/训练的取舍——若放在 G1 回合，自由比赛真实收益会让策略
@@ -2216,7 +2272,10 @@ mod tests {
             pre
         );
         if !has_eat {
-            panic!("测试构造失败：无吃面候选（special={} selected_regions={:?}）", game.ramen.special_feeling, game.ramen.selected_regions);
+            panic!(
+                "测试构造失败：无吃面候选（special={} selected_regions={:?}）",
+                game.ramen.special_feeling, game.ramen.selected_regions
+            );
         }
         if guarantee <= 0.0 {
             panic!("低体力训练失败率>0 时吃面必成价值应>0，实际 {guarantee}");
@@ -2271,11 +2330,10 @@ mod tests {
         let mut local = LocalRamenConfig::default();
         local.friend_future_hidden_weight = 1.0;
         let trainer = LocalRamenTrainer::with_configs(RamenPolicyConfig::default(), local);
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
 
         // 早期：turn=30（第二年），特殊=0，未用过友人 → 剩余回合多、需求大 → gap>0
         game.base.turn = 30;
@@ -2335,11 +2393,10 @@ mod tests {
         let off = LocalRamenTrainer::with_configs(policy_off, LocalRamenConfig::default());
         let on = LocalRamenTrainer::with_configs(policy_on, LocalRamenConfig::default());
 
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 3, 0, 0, 0], extra_count: [0, 30, 0, 0, 30, 30] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 3, 0, 0, 0],
+            extra_count: [0, 30, 0, 0, 30, 30]
+        })?;
         game.base.turn = 50;
         game.uma.vital = 100;
 
@@ -2418,11 +2475,10 @@ mod tests {
         let off = LocalRamenTrainer::with_configs(RamenPolicyConfig::default(), cfg_off);
         let on = LocalRamenTrainer::with_configs(RamenPolicyConfig::default(), cfg_on);
 
-        let mut game = RamenGame::newgame(
-            102601,
-            &[302424, 302894, 303044, 302924, 303024, 303054],
-            InheritInfo { blue_count: [15, 0, 0, 0, 3], extra_count: [10, 10, 20, 20, 20, 40] }
-        )?;
+        let mut game = RamenGame::newgame(102601, &[302424, 302894, 303044, 302924, 303024, 303054], InheritInfo {
+            blue_count: [15, 0, 0, 0, 3],
+            extra_count: [10, 10, 20, 20, 20, 40]
+        })?;
         game.base.turn = 30; // year2 中期，吃面落地前
         game.uma.vital = 100;
         game.ramen.current_ramen = Some(rid); // 模拟已吃面（用于 evaluate decide_train）
@@ -2449,11 +2505,23 @@ mod tests {
         let (_, outs_on) = on.decide_train(&preview, &actions)?;
         for (act, (o_off, o_on)) in actions.iter().zip(outs_off.iter().zip(outs_on.iter())) {
             if let Operation::Train(TrainingType::Wisdom) = act.operation {
-                let bonus_off = o_off.breakdown.iter().find(|(k, _)| k == "ramen_weak_train_boost").map(|(_, v)| *v).unwrap_or(0.0);
-                let bonus_on = o_on.breakdown.iter().find(|(k, _)| k == "ramen_weak_train_boost").map(|(_, v)| *v).unwrap_or(0.0);
+                let bonus_off = o_off
+                    .breakdown
+                    .iter()
+                    .find(|(k, _)| k == "ramen_weak_train_boost")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
+                let bonus_on = o_on
+                    .breakdown
+                    .iter()
+                    .find(|(k, _)| k == "ramen_weak_train_boost")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
                 let score_diff = o_on.score - o_off.score;
-                println!("智训练: off_score={:.1} on_score={:.1} diff={:.1} weakboost_off={:.1} weakboost_on={:.1}",
-                    o_off.score, o_on.score, score_diff, bonus_off, bonus_on);
+                println!(
+                    "智训练: off_score={:.1} on_score={:.1} diff={:.1} weakboost_off={:.1} weakboost_on={:.1}",
+                    o_off.score, o_on.score, score_diff, bonus_off, bonus_on
+                );
                 if bonus_off != 0.0 {
                     panic!("boost=0 时不应有 ramen_weak_train_boost 项: {bonus_off}");
                 }
@@ -2469,7 +2537,12 @@ mod tests {
         let (_, outs_no_eat) = on.decide_train(&no_eat, &actions)?;
         for (act, o) in actions.iter().zip(outs_no_eat.iter()) {
             if let Operation::Train(TrainingType::Wisdom) = act.operation {
-                let bonus = o.breakdown.iter().find(|(k, _)| k == "ramen_weak_train_boost").map(|(_, v)| *v).unwrap_or(0.0);
+                let bonus = o
+                    .breakdown
+                    .iter()
+                    .find(|(k, _)| k == "ramen_weak_train_boost")
+                    .map(|(_, v)| *v)
+                    .unwrap_or(0.0);
                 println!("不吃面时智训练 weakboost: {bonus}");
                 if bonus != 0.0 {
                     panic!("不吃面时不应有 ramen_weak_train_boost: {bonus}");
@@ -2612,4 +2685,3 @@ mod tests {
         println!("select_action 总耗时 - reserve_penalty 预估 ≈ 其他打分项。");
     }
 }
-

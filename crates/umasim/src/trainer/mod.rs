@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub mod handwritten_trainer;
+pub mod local_ramen_parity;
 pub mod local_ramen_trainer;
 pub mod logging_trainer;
 pub mod mcts_trainer;
@@ -21,7 +22,8 @@ pub mod ramen_mcts_trainer;
 //pub mod neural_net_trainer;
 
 pub use handwritten_trainer::HandwrittenTrainer;
-pub use local_ramen_trainer::{LocalRamenTrainer, RecommendedRamenTrainer};
+pub use local_ramen_parity::RestoredRamenTrainer as RecommendedRamenTrainer;
+pub use local_ramen_trainer::LocalRamenTrainer;
 pub use logging_trainer::LoggingTrainer;
 pub use mcts_trainer::MctsTrainer;
 pub use ramen_handwritten_trainer::RamenHandwrittenTrainer;
@@ -172,8 +174,8 @@ impl<G: Game> Trainer<G> for ManualTrainer {
                 let selected = Select::new("请选择:", explain.clone()).prompt()?;
                 explain
                     .iter()
-                    .position(|x| x == &selected)
-                    .ok_or_else(|| anyhow::anyhow!("未找到该选项: {selected}"))
+                    .position(|x| *x == selected)
+                    .ok_or_else(|| anyhow::anyhow!("未找到该动作: {selected}"))
             }
             #[cfg(not(feature = "cli"))]
             FallbackMode::Interactive => Err(anyhow::anyhow!(

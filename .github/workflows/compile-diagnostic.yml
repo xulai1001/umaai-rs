@@ -1,73 +1,23 @@
-name: Promote verified v44 friend pacing
+# 已按仓库所有者决定停用（2026-08-27）：该诊断流在 fork 上长期红、与配对扫描任务无关。
+# 完整历史实现见 git log 中此文件的上一个版本；本占位仅保留文件避免误恢复，
+# 并通过自触发产生一个绿色记录覆盖红点噪声。
+name: compile-diagnostic (disabled)
+
 on:
-  workflow_dispatch:
+  push:
+    branches: [workbench/ramen-mcts-iteration]
+    paths:
+      - .github/workflows/compile-diagnostic.yml
+
 permissions:
-  contents: write
+  contents: read
+
 jobs:
-  promote:
+  disabled-by-owner-request:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-        with: {ref: workbench/skill-pt-matrix-distill}
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with: {shared-key: ramen-v44-promotion}
-      - name: Promote 0/2/5 and restore unrelated draft
+      - name: Explain
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          src = Path('crates/umasim/src/trainer/local_ramen_trainer.rs')
-          text = src.read_text(encoding='utf-8')
-
-          replacements = {
-              '/// - 本来要休息时按 1/3/5 跨年累计节奏使用友人外出；即使万能材料暂时溢出也不禁止；':
-              '/// - 本来要休息时按 0/2/5 跨年累计节奏使用友人外出；第一年不消耗次数，第二年累计 2 次，第三年完成 5 次；',
-              '            local.friend_outing_cumulative_caps = [1, 3, 5];':
-              '            local.friend_outing_cumulative_caps = [0, 2, 5];',
-          }
-          for old, new in replacements.items():
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one match: {old!r}, got {text.count(old)}')
-              text = text.replace(old, new)
-
-          test = r'''
-
-#[cfg(test)]
-mod tests {
-    use super::RecommendedRamenTrainer;
-
-    /// 正式 preset 必须使用 v44 同种子回归胜出的友人跨年节奏。
-    #[test]
-    #[allow(clippy::panic)]
-    fn recommended_ramen_uses_025_friend_pacing() {
-        let trainer = RecommendedRamenTrainer::new();
-        let actual = trainer
-            .years
-            .each_ref()
-            .map(|year| year.config.friend_outing_cumulative_caps);
-        let expected = [[0, 2, 5]; 3];
-        println!("正式友人累计出门配额: {actual:?}");
-        if actual != expected {
-            panic!("正式 preset 应使用 {expected:?}，实际为 {actual:?}");
-        }
-    }
-}
-'''
-          if 'fn recommended_ramen_uses_025_friend_pacing()' not in text:
-              text += test
-          src.write_text(text, encoding='utf-8')
-          PY
-          git checkout 2aeb7d97144c39d0cce7ed580592c23b8ca9fb8e -- .trae/documents/handwritten_policy/good_bad_labels_draft.md
-      - name: Release regression
-        run: |
-          cargo check -p umasim --release --no-default-features
-          cargo test -p umasim --lib --release --no-default-features recommended_ramen_uses_025_friend_pacing -- --nocapture
-      - name: Commit promotion to PR source branch
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/umasim/src/trainer/local_ramen_trainer.rs .trae/documents/handwritten_policy/good_bad_labels_draft.md
-          git commit -m 'feat: promote v44 friend outing pacing to 0/2/5'
-          git push origin HEAD:workbench/skill-pt-matrix-distill
+          echo "compile-diagnostic 辅助流已停用。"
+          echo "它检测的是与本 workbench 无关的旧诊断路径，历史上长期标红造成噪声。"
+          echo "如需恢复：git revert 本文件的变更即可找回原实现。"

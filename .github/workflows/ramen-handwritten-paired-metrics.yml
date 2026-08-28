@@ -1,0 +1,197 @@
+name: Ramen handwritten paired metrics
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: 'RAMEN_VARIANT token（空=锁定冠军版）'
+        required: false
+        default: ''
+      deck_counts:
+        description: '五位数字卡组（速耐力根智，空=默认 21002）'
+        required: false
+        default: ''
+      deck_label:
+        description: '卡组显示名（可留空）'
+        required: false
+        default: ''
+      runs:
+        description: '配对局数（空=默认 300）'
+        required: false
+        default: ''
+  push:
+    branches: [workbench/ramen-mcts-iteration]
+    paths:
+      - .github/workflows/ramen-handwritten-paired-metrics.yml
+      - crates/umasim/src/bin/ramen_metric_compare.rs
+      - crates/umasim/src/trainer/local_ramen_trainer.rs
+      - crates/umasim/src/trainer/local_ramen_parity.rs
+      - crates/umasim/src/trainer/mod.rs
+
+permissions:
+  contents: write
+
+jobs:
+  paired-metrics:
+    name: paired-metrics (${{ matrix.deck_label }} / ${{ matrix.variant }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ===== 终验批：双冠军卡组 r800 定档 ＋ 31001 组合筛选 =====
+          # 深水矿脉终局：cook55×y3loose 双卡组均无交互惩罚且 P90/PT 面全绿。
+          # prw250 弃用（组合中稀释均分）。31001 六探针全绿，先筛两种组合再定其 r800。
+          # 本批同时是新编译速度档（O3+thinLTO+CGU1 / rayon 并行）的实测载体：
+          # candidate 与上游基线使用同一套新开关重编，配对口径不变。
+          - deck_slug: deck21002
+            deck_label: 2速1耐2智·final-v3
+            deck_counts: '21002'
+            variant: hint9-res60-cook55-y3loose
+            variant_env: hint9-res60-cook55-y3pre15-y3sf25-y3hard10
+            runs_count: '800'
+          - deck_slug: deck20111
+            deck_label: 2速1力1根1智·final-v3
+            deck_counts: '20111'
+            variant: sac180-cy3-combo
+            variant_env: sac180-win200-hint9-res60-cook55-y3pre15-y3sf25-y3hard10
+            runs_count: '800'
+          - deck_slug: deck31001
+            deck_label: 3速1耐1智·comboA
+            deck_counts: '31001'
+            variant: c+y3+w12
+            variant_env: cook55-y3pre15-y3sf25-y3hard10-win120
+            runs_count: '300'
+          - deck_slug: deck31001
+            deck_label: 3速1耐1智·comboB
+            deck_counts: '31001'
+            variant: c+y3+w12+r40
+            variant_env: cook55-y3pre15-y3sf25-y3hard10-win120-res40
+            runs_count: '300'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      RUNS: ${{ matrix.runs_count }}
+      DECK_COUNTS: ${{ matrix.deck_counts }}
+      DECK_LABEL: ${{ matrix.deck_label }}
+      RAMEN_VARIANT: ${{ matrix.variant_env }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: workbench/ramen-mcts-iteration
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run candidate metrics (${{ matrix.deck_slug }} / ${{ matrix.variant }})
+        env:
+          SIDE: candidate-${{ matrix.deck_slug }}-${{ matrix.variant }}
+          OUT: candidate-metrics.txt
+        run: cargo run -p umasim --bin ramen_metric_compare --release --no-default-features
+      - name: Prepare exact upstream baseline checkout (read-only fetch, no upstream CI)
+        run: |
+          git fetch --no-tags https://github.com/xulai1001/umaai-rs.git \
+            ramen_workbench:refs/remotes/upstream/ramen_workbench
+          git worktree add --detach /tmp/ramen-baseline a6e1f481ee4c6367b8ae1f876721a8889c4ae586
+          cp crates/umasim/src/bin/ramen_metric_compare.rs /tmp/ramen-baseline/crates/umasim/src/bin/ramen_metric_compare.rs
+      - name: Run exact baseline metrics (${{ matrix.deck_label }})
+        working-directory: /tmp/ramen-baseline
+        env:
+          SIDE: baseline-${{ matrix.deck_slug }}
+          OUT: ${{ github.workspace }}/baseline-metrics.txt
+        run: cargo run -p umasim --bin ramen_metric_compare --release --no-default-features
+      - name: Build report and record gate decision
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          def read(path):
+              result = {}
+              for line in Path(path).read_text().splitlines():
+                  key, _, value = line.partition('=')
+                  result[key] = value.strip()
+              return result
+
+          def num(row, key):
+              return float(row[key])
+
+          base = read('baseline-metrics.txt')
+          cand = read('candidate-metrics.txt')
+          deck = os.environ['DECK_LABEL']
+          counts = os.environ['DECK_COUNTS']
+          variant = os.environ['RAMEN_VARIANT'] or '(locked-champion)'
+          keys = [
+              ('score_mean', '总分'),
+              ('attribute_score_mean', '属性评分'),
+              ('skill_pt_mean', '技能PT'),
+          ]
+          lines = ['# Ramen handwritten paired metrics', '',
+                   f"变体：{variant}，配卡：{deck}（counts={counts}），"
+                   f"基线：上游 ramen_workbench @ a6e1f48，配对局数 {int(num(base, 'runs'))}",
+                   '', '|指标|基线均值|候选均值|变化|结论|', '|---|---:|---:|---:|---|']
+          ok = True
+          for key, label in keys:
+              base_mean = num(base, key)
+              cand_mean = num(cand, key)
+              delta = cand_mean - base_mean
+              passed = delta > 0
+              ok = ok and passed
+              verdict = '提升' if passed else '未提升'
+              lines.append(f'|{label}|{base_mean:.3f}|{cand_mean:.3f}|{delta:+.3f}|{verdict}|')
+          lines.append('')
+          conclusion = '三项全部严格提升，通过' if ok else '存在未提升指标，失败'
+          lines.append(f'**整体结论：{conclusion}**')
+
+          # —— 凹分参考段（不进闸门；v2 输出键存在才展示）——
+          ref_keys = [
+              ('score_max', '总分max'),
+              ('score_p50', '总分P50'),
+              ('score_p90', '总分P90'),
+              ('skill_pt_max', '技能PT max'),
+              ('skill_pt_p90', '技能PT P90'),
+              ('skill_pt_ge_7500_rate', 'PT≥7500达标率'),
+              ('skill_pt_ge_8000_rate', 'PT≥8000达标率'),
+          ]
+          if all(k in base for k, _ in ref_keys):
+              lines += ['', '## 凹分口径参考（vs 上游基线同种子分布）', '',
+                        '|指标|基线|候选|差值|', '|---|---:|---:|---:|']
+              for key, label in ref_keys:
+                  b, c = num(base, key), num(cand, key)
+                  lines.append(f'|{label}|{b:.3f}|{c:.3f}|{c-b:+.3f}|')
+          Path('paired-metrics-report.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          Path('.gate-result').write_text('pass' if ok else 'fail', encoding='utf-8')
+          print('\n'.join(lines))
+          PY
+          cat paired-metrics-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish report to workbench branch
+        if: always() && hashFiles('paired-metrics-report.md') != ''
+        run: |
+          REPORT="benchmark-results/paired-metrics-${{ matrix.deck_slug }}-${{ matrix.variant }}.md"
+          mkdir -p benchmark-results
+          cp paired-metrics-report.md "$REPORT"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          for attempt in 1 2 3 4 5; do
+            git add -f "$REPORT"
+            git diff --cached --quiet || git commit -m "bench: publish ${{ matrix.deck_slug }}/${{ matrix.variant }} report run ${{ github.run_id }}"
+            if git push origin HEAD:workbench/ramen-mcts-iteration; then
+              echo "pushed on attempt $attempt"; break
+            fi
+            echo "push conflict, retrying ($attempt)"
+            sleep $((attempt * 20))
+            git fetch origin workbench/ramen-mcts-iteration
+            git rebase --autostash FETCH_HEAD || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('paired-metrics-report.md') != ''
+        with:
+          name: ramen-paired-metrics-${{ matrix.deck_slug }}-${{ matrix.variant }}-${{ github.run_id }}
+          path: |
+            baseline-metrics.txt
+            candidate-metrics.txt
+            paired-metrics-report.md
+          retention-days: 30
+      - name: Enforce strict improvement gate
+        run: |
+          if [ "$(cat .gate-result)" != "pass" ]; then
+            echo "Gate failed: ${{ matrix.deck_slug }}/${{ matrix.variant }} 未全部提升，报告见 benchmark-results/paired-metrics-${{ matrix.deck_slug }}-${{ matrix.variant }}.md"
+            exit 1
+          fi
