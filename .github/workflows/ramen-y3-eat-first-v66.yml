@@ -1,0 +1,80 @@
+name: 第三年先吃面再判体力配对实验
+on:
+  push:
+    branches: [workbench/ramen-improve-1]
+    paths: ['.github/workflows/ramen-y3-eat-first-v66.yml']
+  workflow_dispatch:
+    inputs:
+      runs_per_shard:
+        description: 每片同种子局数
+        required: false
+        default: '100'
+permissions: {contents: read}
+jobs:
+  matrix:
+    name: ${{ matrix.variant }}｜第${{ matrix.shard }}片
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        variant: [旧版第三年无门, 先吃面不判体力_不吃门30]
+        shard: [0, 1, 2]
+    env:
+      方案: ${{ matrix.variant }}
+      分片序号: ${{ matrix.shard }}
+      每分片局数: ${{ inputs.runs_per_shard || '100' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 应用第三年判断顺序补丁
+        run: python3 scripts/ramen/apply_y3_eat_first_vital_gate.py
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: {shared-key: ramen-y3-eat-first-v66}
+      - name: 编译并运行配对实验
+        run: cargo run -p umasim --bin y3_eat_first_vital_matrix --release --features experiment-tools --no-default-features
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.variant }}-第${{ matrix.shard }}片
+          path: 第三年先吃面体力实验.csv
+          if-no-files-found: error
+          retention-days: 30
+  summary:
+    name: 汇总第三年体力实验
+    needs: matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: '*-第*片', path: results}
+      - name: 生成确认报告
+        run: |
+          python3 - <<'PY' | tee 第三年先吃面体力实验报告.md
+          import csv,glob,collections,statistics
+          data=collections.defaultdict(list)
+          for p in glob.glob('results/**/第三年先吃面体力实验.csv',recursive=True):
+            with open(p,newline='') as f:
+              for r in csv.DictReader(f): data[r['方案']].append(r)
+          expected={'旧版第三年无门','先吃面不判体力_不吃门30'}
+          if set(data)!=expected: raise SystemExit({k:len(v) for k,v in data.items()})
+          if any(len(v)!=300 for v in data.values()): raise SystemExit({k:len(v) for k,v in data.items()})
+          def values(rows,key): return sorted(float(r[key]) for r in rows)
+          def p10(v): return v[int((len(v)-1)*.1)]
+          print('# 第三年先吃面再判体力配对实验\n')
+          print('|方案|局数|平均总分|总分P10|平均技能PT|RMJ全通率|')
+          print('|---|---:|---:|---:|---:|---:|')
+          for name,rows in data.items():
+            score=values(rows,'总分'); pt=values(rows,'技能点')
+            rmj=sum(int(r['RMJ成功年数'])==3 for r in rows)/len(rows)
+            print(f'|{name}|{len(rows)}|{statistics.mean(score):.1f}|{p10(score):.0f}|{statistics.mean(pt):.1f}|{rmj:.3f}|')
+          base={int(r['局序号']):int(r['总分']) for r in data['旧版第三年无门']}
+          cand={int(r['局序号']):int(r['总分']) for r in data['先吃面不判体力_不吃门30']}
+          delta=[cand[i]-base[i] for i in sorted(base)]
+          print(f'\n配对分差：平均 **{statistics.mean(delta):+.1f}**，胜/平/负 = {sum(x>0 for x in delta)}/{sum(x==0 for x in delta)}/{sum(x<0 for x in delta)}。')
+          PY
+          cat 第三年先吃面体力实验报告.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 第三年先吃面体力实验报告
+          path: 第三年先吃面体力实验报告.md
+          retention-days: 30

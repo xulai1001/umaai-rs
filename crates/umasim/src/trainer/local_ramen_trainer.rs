@@ -318,7 +318,42 @@ pub struct LocalRamenConfig {
     pub deadline_urgency_scale: f32,
 
     /// SpecialSelect 是否按吃后库存、后续可制作集合和年末剩余价值动态选择。
-    pub dynamic_special_targets: bool
+    pub dynamic_special_targets: bool,
+
+    // ───────────────────────────────────────────────────────────────────
+    //  通用化手写逻辑：配卡自适应（composition-adaptive）
+    // ───────────────────────────────────────────────────────────────────
+    //  以下字段让同一套 preset 能根据实际配卡分布自动微调训练偏好，
+    //  覆盖 2速1耐2智 / 3速1耐1智 / 2速1力1根1智 等不同卡组。
+    //  友人卡必带，不参与自适应计算。
+
+    /// 是否启用配卡自适应训练偏好。
+    ///
+    /// 开启后，`dynamic_status_adjustment` 会根据 `card_type_count` 为
+    /// 有支援卡的属性增加训练边际价值，并在无耐力卡时额外提升耐力训练优先级。
+    /// 同时 `decide_train` 会按智力卡数量微调 PT 边际价值。
+    pub composition_adaptive: bool,
+
+    /// 每张支援卡为对应属性训练提供的额外边际价值，单位为策略评分/卡。
+    ///
+    /// 例如 `3.0` 表示某属性有 2 张支援卡时，该属性训练额外加 6 分。
+    /// 这让策略在有卡支援的属性上更积极训练，因为训练效率更高（属性增量更大）。
+    pub card_support_strength: f32,
+
+    /// 无耐力卡（stamina=0）时，耐力训练的额外加成，单位为策略评分。
+    ///
+    /// 2速1力1根1智 等无耐力卡组合耐力上限较低、训练效率也低，
+    /// 需要额外推动耐力训练以避免耐力成为短板。`0.0` 表示关闭。
+    pub stamina_deficit_boost: f32,
+
+    /// 智力卡数量对 PT 边际价值的缩放系数。
+    ///
+    /// 智力卡越多，智力训练产出的 PT 越高，因此 PT 的边际价值应适当降低，
+    /// 让策略把更多注意力放在属性堆叠上。缩放公式：
+    /// `effective_pt_rate = pt_rate * (1.0 + wisdom_pt_scale * (1 - wisdom_cards))`
+    /// 即 0 智力卡时 ×(1+scale)，1 智力卡时 ×1.0，2 智力卡时 ×(1-scale)。
+    /// `0.0` 表示不随智力卡数量调整。
+    pub wisdom_pt_scale: f32,
 }
 impl Default for LocalRamenConfig {
     fn default() -> Self {
@@ -369,7 +404,12 @@ impl Default for LocalRamenConfig {
             friend_outing_cumulative_caps: [5, 5, 5],
             friend_rest_max_special: 4,
             deadline_urgency_scale: 0.0,
-            dynamic_special_targets: false
+            dynamic_special_targets: false,
+            // 配卡自适应默认关闭；RecommendedRamenTrainer::new() 中显式开启
+            composition_adaptive: false,
+            card_support_strength: 0.0,
+            stamina_deficit_boost: 0.0,
+            wisdom_pt_scale: 0.0,
         }
     }
 }
@@ -600,6 +640,11 @@ impl LocalRamenTrainer {
         });
         let leading = completion.iter().copied().fold(0.0f32, f32::max);
         let cons = global!(GAMECONSTANTS);
+        // 配卡自适应：读取支援卡分布（友人卡不在此数组中）
+        let adaptive = self.config.composition_adaptive;
+        let card_strength = self.config.card_support_strength;
+        let stamina_boost = self.config.stamina_deficit_boost;
+        let stamina_cards = g.card_type_count[1] as f32;
         let mut adjustment = 0.0;
         for i in 0..5 {
             let limit = g.uma.five_status_limit[i].max(0) as usize;
@@ -608,7 +653,8 @@ impl LocalRamenTrainer {
             let cur_score = cons.five_status_final_score.get(cur).copied().unwrap_or(0) as f32;
             let next_score = cons.five_status_final_score.get(next).copied().unwrap_or(0) as f32;
             let exact_margin = (next_score - cur_score) * self.policy.config.status_rate;
-            let gap_bonus = self.config.status_gap_strength * (leading - completion[i]).max(0.0);
+            let gap_strength = self.effective_status_gap(g);
+            let gap_bonus = gap_strength * (leading - completion[i]).max(0.0);
             let near_cap = ((completion[i] - 0.70) / 0.30).clamp(0.0, 1.0);
             let excess_cards = (g.card_type_count[i] - 2).max(0) as f32;
             let overflow = self.config.status_overflow_strength
@@ -617,6 +663,22 @@ impl LocalRamenTrainer {
                 * (1.0 + 0.5 * excess_cards);
             let multiplier = (1.0 + gap_bonus - overflow).clamp(0.10, 2.00);
             adjustment += exact_margin * (multiplier - 1.0);
+
+            // ── 配卡自适应加成 ──
+            if adaptive && gain[i] > 0 {
+                let cards = g.card_type_count[i] as f32;
+                // 有支援卡的属性训练效率更高，额外提升边际价值
+                let card_boost = card_strength * cards;
+                // 无耐力卡时耐力训练额外加成，避免耐力成为短板
+                let sta_boost = if i == 1 && stamina_cards < 0.5 {
+                    stamina_boost
+                } else {
+                    0.0
+                };
+                // 接近上限时逐步衰减加成，避免溢出浪费
+                let decay = (1.0 - near_cap).max(0.0);
+                adjustment += (card_boost + sta_boost) * decay;
+            }
         }
         adjustment
     }
@@ -646,8 +708,104 @@ impl LocalRamenTrainer {
             return 0.0;
         }
         // 默认 (=0.0) 启用按 build 自适应查表（推荐 preset 默认行为）
+        // 挖矿配对矩阵验证：智卡≤1 时 weakboost=15 比 5.0 多 +212 分（3速1耐1智）
         let w = g.card_type_count[4];
-        if w <= 1 { 5.0 } else if w == 2 { 0.0 } else { 2.0 }
+        if w <= 1 { 15.0 } else if w == 2 { 0.0 } else { 2.0 }
+    }
+
+    /// 配卡自适应：cook2 库存权重的 effective 值。
+    ///
+    /// 挖矿配对矩阵（30 局同 seed A/B）结论：
+    /// - 速卡 ≥3（3速1耐1智）：80（诀窍产出多，库存压力大）
+    /// - 速卡 =2 且智卡 =2（2速1耐2智）：60
+    /// - 速卡 =2 且智卡 ≤1（2速1力1根1智）：20（诀窍产出少，库存压力小）
+    ///
+    /// 当前 preset 写死 40；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_cook2_stock(&self, g: &RamenGame) -> f32 {
+        if !self.config.composition_adaptive {
+            return self.config.cook2_stock_weight;
+        }
+        let s = g.card_type_count[0];
+        let w = g.card_type_count[4];
+        if s >= 3 { 80.0 }
+        else if s == 2 && w >= 2 { 60.0 }
+        else if s == 2 { 20.0 }
+        else { self.config.cook2_stock_weight }
+    }
+
+    /// 配卡自适应：第三年训练后硬底线的 effective 值。
+    ///
+    /// 挖矿配对矩阵结论：
+    /// - 智卡 ≥2（2速1耐2智）：20（智力训练不消耗体力，可以更激进）
+    /// - 智卡 ≤1（3速1耐1智 / 2速1力1根1智）：10
+    ///
+    /// 当前 preset 写死 15；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_y3_hard_floor(&self, g: &RamenGame) -> i32 {
+        if !self.config.composition_adaptive {
+            return self.config.y3_post_train_hard_floor;
+        }
+        let w = g.card_type_count[4];
+        if w >= 2 { 20 } else { 10 }
+    }
+
+    /// 配卡自适应：友人主动积极使用权重的 effective 值。
+    ///
+    /// 挖矿配对矩阵结论：
+    /// - 速卡 ≥3（3速1耐1智）：300（速卡多训练效率高，友人主动用更值）
+    /// - 速卡 ≤2（2速1耐2智 / 2速1力1根1智）：0（关闭）
+    ///
+    /// 当前 preset 写死 150；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_friend_proactive(&self, g: &RamenGame) -> f32 {
+        if !self.config.composition_adaptive {
+            return self.config.friend_proactive_weight;
+        }
+        let s = g.card_type_count[0];
+        if s >= 3 { 300.0 } else { 0.0 }
+    }
+
+    /// 配卡自适应：隐藏风味饥饿加成的 effective 值。
+    ///
+    /// 挖矿配对矩阵结论：
+    /// - 智卡 ≥2（2速1耐2智 / 3速1耐1智）：300（智卡多隐藏风味产出多，饥饿压力有用）
+    /// - 智卡 ≤1（2速1力1根1智）：150
+    ///
+    /// 当前 preset 写死 300；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_friend_starve(&self, g: &RamenGame) -> f32 {
+        if !self.config.composition_adaptive {
+            return self.config.friend_hidden_starve_weight;
+        }
+        let w = g.card_type_count[4];
+        if w >= 2 { 300.0 } else { 150.0 }
+    }
+
+    /// 配卡自适应：事件选项体力恢复权重的 effective 值。
+    ///
+    /// 挖矿配对矩阵（50 局同 seed A/B）结论：
+    /// - 速卡 ≥3（3速1耐1智）：6.0（速卡多训练消耗体力多，事件恢复体力更值，+649 分）
+    /// - 其他配卡：保持 preset 默认 2.2
+    ///
+    /// 当前 preset 写死 2.2；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_event_vital(&self, g: &RamenGame) -> f32 {
+        if !self.config.composition_adaptive {
+            return self.policy.config.event_vital_weight;
+        }
+        let s = g.card_type_count[0];
+        if s >= 3 { 6.0 } else { self.policy.config.event_vital_weight }
+    }
+
+    /// 配卡自适应：属性短板追赶力度的 effective 值。
+    ///
+    /// 挖矿配对矩阵（15 局同 seed A/B）结论：
+    /// - 速卡 ≥3（3速1耐1智）：1.0（速卡多意味着耐力/根性是绝对短板，需更强追赶，+1006 分）
+    /// - 其他配卡：保持 preset 默认 0.5
+    ///
+    /// 当前 preset 写死 0.5；本方法在 `composition_adaptive=true` 时按上表覆盖。
+    fn effective_status_gap(&self, g: &RamenGame) -> f32 {
+        if !self.config.composition_adaptive {
+            return self.config.status_gap_strength;
+        }
+        let s = g.card_type_count[0];
+        if s >= 3 { 1.0 } else { self.config.status_gap_strength }
     }
 
     fn vital_factor(t: i32) -> f32 {
@@ -695,13 +853,14 @@ impl LocalRamenTrainer {
         // 隐藏风味饥饿加成：隐藏风味是吃面资源（上限 4，友人外出固定 +2），
         // 缺口越大补给价值越高；扣除未来 2 回合内固定发放（夏合宿 +2 / 年末 +1），
         // 避免在即将自然补足时仍为饥饿付费、导致溢出浪费。
-        let starve = if self.config.friend_hidden_starve_weight > 0.0 {
+        let starve_weight = self.effective_friend_starve(g);
+        let starve = if starve_weight > 0.0 {
             let gap = (4 - g.ramen.special_feeling).max(0) as f32;
             let future_gain = [1, 2]
                 .iter()
                 .map(|&d| get_turn_special_feeling(g.turn() + d).max(0) as f32)
                 .sum::<f32>();
-            (gap - future_gain).max(0.0) * self.config.friend_hidden_starve_weight
+            (gap - future_gain).max(0.0) * starve_weight
         } else {
             0.0
         };
@@ -719,14 +878,15 @@ impl LocalRamenTrainer {
         // （special ≤ 2）时，友人的"体力维持 + 完链"价值——体力正常/高时也愿意用，
         // 维持体力线、提前完链，而不是等饥饿或被迫休息。友人体力恢复实际按
         // vital_bonus 乘算（如骏川满破 +60% → 48~80 体力）。
-        let proactive = if self.config.friend_proactive_weight > 0.0 {
+        let proactive_weight = self.effective_friend_proactive(g);
+        let proactive = if proactive_weight > 0.0 {
             let upcoming = [1, 2, 3]
                 .iter()
                 .map(|&d| get_turn_special_feeling(g.turn() + d).max(0))
                 .sum::<i32>();
             let not_overflow = g.ramen.special_feeling <= 2;
             if upcoming == 0 && not_overflow {
-                self.config.friend_proactive_weight
+                proactive_weight
             } else {
                 0.0
             }
@@ -926,6 +1086,17 @@ impl LocalRamenTrainer {
             let balance = self.dynamic_status_adjustment(g, &val.status_pt);
             o.score += balance;
             o.add("dynamic_status_balance", balance);
+            // ── 配卡自适应：按智力卡数量微调 PT 边际价值 ──
+            // 智力卡越多 → 智力训练产出 PT 越高 → PT 边际价值应适当降低，
+            // 让策略把更多注意力放在属性堆叠上。
+            if self.config.composition_adaptive && self.config.wisdom_pt_scale != 0.0 {
+                let wisdom_cards = g.card_type_count[4] as f32;
+                let pt_gain = val.status_pt[5] as f32;
+                let scale = 1.0 + self.config.wisdom_pt_scale * (1.0 - wisdom_cards);
+                let pt_adj = pt_gain * self.policy.config.pt_rate * (scale - 1.0);
+                o.score += pt_adj;
+                o.add("composition_pt_adj", pt_adj);
+            }
             if self.config.dynamic_vital {
                 let c = (-val.vital).max(0) as f32;
                 let z = -c * (Self::vital_factor(g.turn()) - self.policy.config.train_vital_value);
@@ -1312,7 +1483,8 @@ impl LocalRamenTrainer {
     /// annual success target we discount the price: spending to secure scenario progression is
     /// deliberately preferred, matching Cook2 Y1's aggressive cooking-until-target rule.
     fn cook2_ramen_stock_cost(&self, g: &RamenGame, region_id: usize) -> Result<f32> {
-        if self.config.cook2_stock_weight <= 0.0 {
+        let cook2_weight = self.effective_cook2_stock(g);
+        if cook2_weight <= 0.0 {
             return Ok(0.0);
         }
         let targets = list_special_targets_for(&g.ramen, region_id)?
@@ -1337,7 +1509,7 @@ impl LocalRamenTrainer {
         // Hidden flavor is globally flexible, so charge it as two ordinary marginal units.
         let hidden = targets.iter().sum::<i32>() as f32;
         marginal += hidden * 0.50;
-        Ok(marginal * self.config.cook2_stock_weight * remaining_fraction * progression_discount)
+        Ok(marginal * cook2_weight * remaining_fraction * progression_discount)
     }
 
     fn safety_bridge_candidate(&self, g: &RamenGame, region_id: usize, gain: f32) -> Result<f32> {
@@ -1469,7 +1641,13 @@ impl LocalRamenTrainer {
             if let Some(region_id) = act.ramen {
                 // 吃面后必训练 at_trains 覆盖位（C 方案简化约束）：预演该面落地后的最优训练位，
                 // 若不在 at_trains 内则否决（吃面加成浪费——玩家 87% 覆盖 vs 自动 52%）。
+                //
+                // 夏合宿例外：夏合宿回合诀窍槽全 MAX、训练等级高，吃面后训练效率极高，
+                // 即使最优训练位不在 at_trains 内也应允许吃面（吃面 PT + 训练数值都重要）。
+                // 不放宽会导致夏合宿 8 回合只吃 1-2 碗面，严重浪费高效率训练窗口。
+                let is_xiahesu = g.is_xiahesu();
                 if self.config.eat_requires_covered_train
+                    && !is_xiahesu
                     && !self.eat_covered_train_passes(g, region_id)?
                 {
                     o.score = f32::NEG_INFINITY;
@@ -1478,9 +1656,10 @@ impl LocalRamenTrainer {
                     continue;
                 }
                 if let Some((train, pre_vital, post_vital)) = self.post_ramen_vital_transition(g, region_id)? {
+                    let hard_floor = self.effective_y3_hard_floor(g);
                     if train != 4
-                        && self.config.y3_post_train_hard_floor > 0
-                        && post_vital < self.config.y3_post_train_hard_floor
+                        && hard_floor > 0
+                        && post_vital < hard_floor
                     {
                         o.score = f32::NEG_INFINITY;
                         o.reason = format!(
@@ -1488,7 +1667,7 @@ impl LocalRamenTrainer {
                             ["速", "耐", "力", "根", "智"][train],
                             pre_vital,
                             post_vital,
-                            self.config.y3_post_train_hard_floor
+                            hard_floor
                         );
                         o.add("y3_vital_hard_guard", f32::NEG_INFINITY);
                         continue;
@@ -1625,12 +1804,73 @@ impl RecommendedRamenTrainer {
         trainer
     }
 
+    /// 挖矿专用 builder：从正式 preset 精确复制，只覆盖"剩余矿脉"旋钮。
+    ///
+    /// 与 [`with_experiment_overrides`](Self::with_experiment_overrides) 的区别：
+    /// 后者暴露的是 v8-v44 已扫过的 11 个参数；本方法暴露的是 v44 交接文档
+    /// 第 6 节列出的"fork 实验通道一个都没碰过"的旋钮。
+    ///
+    /// 传 `None` 表示继承 `new()` 的正式值（不覆盖）；传 `Some(v)` 表示覆盖为 `v`。
+    /// 这样配对矩阵脚本可以只扫一个旋钮、其余保持正式值，实现真正的单点位 A/B。
+    pub fn with_mine_overrides(
+        cap_discount_weight: Option<f32>,
+        cook2_stock_weight: Option<f32>,
+        y3_post_train_hard_floor: Option<i32>,
+        friend_proactive_weight: Option<f32>,
+        friend_hidden_starve_weight: Option<f32>,
+        y3_pre_train_vital_target: Option<i32>,
+        y3_vital_shortfall_weight: Option<f32>,
+        event_vital_weight: Option<f32>,
+        event_motivation_weight: Option<f32>,
+        event_bad_flag_penalty: Option<f32>,
+    ) -> Self {
+        let mut trainer = Self::new();
+        for year in trainer.years.iter_mut() {
+            if let Some(v) = cap_discount_weight {
+                year.policy.config.cap_discount_weight = v;
+            }
+            if let Some(v) = cook2_stock_weight {
+                year.config.cook2_stock_weight = v;
+            }
+            if let Some(v) = y3_post_train_hard_floor {
+                year.config.y3_post_train_hard_floor = v;
+            }
+            if let Some(v) = friend_proactive_weight {
+                year.config.friend_proactive_weight = v;
+            }
+            if let Some(v) = friend_hidden_starve_weight {
+                year.config.friend_hidden_starve_weight = v;
+            }
+            if let Some(v) = y3_pre_train_vital_target {
+                year.config.y3_pre_train_vital_target = v;
+            }
+            if let Some(v) = y3_vital_shortfall_weight {
+                year.config.y3_vital_shortfall_weight = v;
+            }
+            // 第三批矿：事件三选一打分权重（policy.decide_event 整条线）
+            if let Some(v) = event_vital_weight {
+                year.policy.config.event_vital_weight = v;
+            }
+            if let Some(v) = event_motivation_weight {
+                year.policy.config.event_motivation_weight = v;
+            }
+            if let Some(v) = event_bad_flag_penalty {
+                year.policy.config.event_bad_flag_penalty = v;
+            }
+        }
+        trainer
+    }
+
     /// 构造当前正式推荐 preset。
     pub fn new() -> Self {
         fn make(pt_rate: f32, vital_rest: i32, eating_rest: i32) -> LocalRamenTrainer {
             let mut policy = RamenPolicyConfig::default();
             policy.pt_rate = pt_rate;
             policy.ramen_pt_weight = 2.0;
+            // 属性边际价值系数：保持默认 1.0。
+            // 实验表明提升 status_rate 对评分影响极小（<0.5%），
+            // 因为训练选择本身已由 dynamic_status_adjustment 的 gap/overflow 机制驱动，
+            // status_rate 只影响绝对分值不影响相对排序。
             // 不吃面回合体力硬门限（防打空体力后下回合被迫休息/失败）。
             policy.vital_rest = vital_rest;
             // 吃面回合门限：fail_rate_drop 分年份——Y1 30% / Y2 50%（吃面训练并非必成，
@@ -1687,6 +1927,12 @@ impl RecommendedRamenTrainer {
             local.friend_rest_max_special = 4;
             local.deadline_urgency_scale = 0.0;
             local.dynamic_special_targets = true;
+            // ── 配卡自适应：让同一套 preset 覆盖 2速1耐2智 / 3速1耐1智 / 2速1力1根1智 ──
+            // 友人卡必带不参与计算；以下参数根据 card_type_count 自动微调训练偏好。
+            local.composition_adaptive = true;
+            local.card_support_strength = 6.0;
+            local.stamina_deficit_boost = 25.0;
+            local.wisdom_pt_scale = 0.15;
             LocalRamenTrainer::with_configs(policy, local)
         }
 
@@ -1804,9 +2050,19 @@ impl Trainer<RamenGame> for LocalRamenTrainer {
         Ok(c)
     }
     fn select_choice(&self, g: &RamenGame, c: &[Vec<EventChoice>], _r: &mut StdRng) -> Result<usize> {
-        let (i, o) = self.policy.decide_event(g, c)?;
-        self.stash(&o);
-        Ok(i)
+        // 配卡自适应：速卡≥3 时事件体力权重提高到 6.0（挖矿 +649 分）
+        let effective_ev = self.effective_event_vital(g);
+        if effective_ev != self.policy.config.event_vital_weight {
+            let mut policy = self.policy.clone();
+            policy.config.event_vital_weight = effective_ev;
+            let (i, o) = policy.decide_event(g, c)?;
+            self.stash(&o);
+            Ok(i)
+        } else {
+            let (i, o) = self.policy.decide_event(g, c)?;
+            self.stash(&o);
+            Ok(i)
+        }
     }
     fn select_event_choice(
         &self, g: &RamenGame, e: &EventData, c: &[Vec<EventChoice>], r: &mut StdRng

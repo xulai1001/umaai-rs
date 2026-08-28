@@ -1,0 +1,72 @@
+name: 拉面挖矿配对矩阵（fork 专用）
+
+on:
+  push:
+    branches: [workbench/ramen-mine-plan]
+    paths:
+      - '.github/workflows/ramen-mine-pair-matrix.yml'
+      - 'crates/umasim/tools/data_collection/mine_pair_matrix.rs'
+      - 'crates/umasim/src/trainer/local_ramen_trainer.rs'
+      - 'crates/umasim/Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mine:
+    name: 挖矿-${{ matrix.composition_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - composition_index: 81
+            composition_name: 2速1耐2智
+          - composition_index: 97
+            composition_name: 3速1耐1智
+          - composition_index: 76
+            composition_name: 2速1力1根1智
+    env:
+      旋钮: ${{ matrix.knob }}
+      候选值: ${{ matrix.candidates }}
+      配卡索引: ${{ matrix.composition_index }}
+      每候选局数: 30
+    steps:
+      - name: 读取仓库源码
+        uses: actions/checkout@v4
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+      - name: 恢复编译缓存
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mine-pair-matrix
+      - name: 编译挖矿工具
+        run: cargo build -p umasim --bin mine_pair_matrix --release --features experiment-tools --no-default-features
+      - name: 跑 cook2_stock 配对矩阵
+        run: |
+          旋钮=cook2_stock 候选值=20,40,60,80 配卡索引=${{ matrix.composition_index }} 每候选局数=30 \
+            ./target/release/mine_pair_matrix
+      - name: 跑 y3_hard_floor 配对矩阵
+        run: |
+          旋钮=y3_hard_floor 候选值=10,15,20,25 配卡索引=${{ matrix.composition_index }} 每候选局数=30 \
+            ./target/release/mine_pair_matrix
+      - name: 跑 friend_proactive×friend_starve 联合配对矩阵
+        run: |
+          旋钮=friend_proactive 候选值=0,75,150,225,300 \
+          旋钮2=friend_starve 候选值2=0,150,300,450,600 \
+          配卡索引=${{ matrix.composition_index }} 每候选局数=20 \
+            ./target/release/mine_pair_matrix
+      - name: 跑 event_vital 配对矩阵
+        run: |
+          旋钮=event_vital 候选值=1.0,2.2,3.5,5.0,6.0 配卡索引=${{ matrix.composition_index }} 每候选局数=30 \
+            ./target/release/mine_pair_matrix
+      - name: 上传配对结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: 挖矿结果-${{ matrix.composition_name }}
+          path: 挖矿配对结果.csv
+          if-no-files-found: error
+          retention-days: 30

@@ -79,6 +79,11 @@ path = "tools/data_collection/recipe_continuity_matrix.rs"
 required-features = ["experiment-tools"]
 
 [[bin]]
+name = "y3_eat_first_vital_matrix"
+path = "tools/data_collection/y3_eat_first_vital_matrix.rs"
+required-features = ["experiment-tools"]
+
+[[bin]]
 name = "region_gauge_diagnostic"
 path = "tools/data_collection/region_gauge_diagnostic.rs"
 required-features = ["experiment-tools"]
@@ -99,6 +104,16 @@ path = "tools/data_collection/mcts_rollout_switch_verify.rs"
 [[bin]]
 name = "sim_profiler"
 path = "tools/data_collection/sim_profiler.rs"
+
+[[bin]]
+name = "mine_pair_matrix"
+path = "tools/data_collection/mine_pair_matrix.rs"
+required-features = ["experiment-tools"]
+
+[[bin]]
+name = "hw_vs_mcts_compare"
+path = "tools/data_collection/hw_vs_mcts_compare.rs"
+required-features = ["experiment-tools"]
 
 [features]
 default = ["cli", "diag"]

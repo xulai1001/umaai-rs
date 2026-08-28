@@ -1,0 +1,79 @@
+name: 第三年拉面组合全局评分矩阵
+on:
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  matrix:
+    name: 第${{ matrix.shard.human }}片（组合${{ matrix.shard.start }}-${{ matrix.shard.end }}）
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        shard:
+          - {human: 1, start: 0, end: 10}
+          - {human: 2, start: 10, end: 20}
+          - {human: 3, start: 20, end: 30}
+          - {human: 4, start: 30, end: 40}
+          - {human: 5, start: 40, end: 50}
+          - {human: 6, start: 50, end: 60}
+          - {human: 7, start: 60, end: 70}
+          - {human: 8, start: 70, end: 80}
+          - {human: 9, start: 80, end: 90}
+          - {human: 10, start: 90, end: 100}
+          - {human: 11, start: 100, end: 110}
+          - {human: 12, start: 110, end: 120}
+    env:
+      起始组合: ${{ matrix.shard.start }}
+      结束组合: ${{ matrix.shard.end }}
+      每组合局数: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: workbench/y3-region-matrix-corrected}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: {shared-key: y3-region-matrix-corrected}
+      - run: cargo run -p umasim --bin y3_region_matrix_corrected --release --no-default-features
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 第${{ matrix.shard.human }}片-第三年拉面组合评分
+          path: 第三年拉面组合评分.csv
+          retention-days: 30
+  summary:
+    name: 汇总第三年拉面组合评分
+    needs: matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {pattern: '*-第三年拉面组合评分', path: results}
+      - run: |
+          python3 - <<'PY' | tee 第三年拉面组合评分报告.md
+          import csv, glob, collections, statistics
+          rows=[]
+          for p in glob.glob('results/**/第三年拉面组合评分.csv', recursive=True):
+              rows.extend(csv.DictReader(open(p, encoding='utf-8')))
+          if len(rows) != 1200:
+              raise SystemExit(f'期望1200条（120组合×10局），实际{len(rows)}')
+          g=collections.defaultdict(list)
+          for r in rows: g[r['combo_index']].append(r)
+          if len(g) != 120 or any(len(v)!=10 for v in g.values()):
+              raise SystemExit({k:len(v) for k,v in g.items()})
+          def mean(k, v): return statistics.mean(float(r[k]) for r in v)
+          ranked=[]
+          for idx, v in g.items():
+              ranked.append((mean('score',v), mean('skill_pt',v), idx, v[0]['region_ids'], mean('scenario_pt',v)))
+          print('# 第三年拉面组合全局评分矩阵')
+          print('\n> 每个地区组合 10 局；完整育成使用生产 MCTS（train,ramen），仅第三年地区组合被固定。\n')
+          print('|排名|组合索引|地区 ID|平均总分|平均技能点|平均最终 PT|')
+          print('|---:|---:|---|---:|---:|---:|')
+          for rank, x in enumerate(sorted(ranked, reverse=True), 1):
+              print(f'|{rank}|{x[2]}|{x[3]}|{x[0]:.1f}|{x[1]:.1f}|{x[4]:.1f}|')
+          print(f'\n最高平均总分：**{max(ranked)[3]}**，{max(ranked)[0]:.1f}')
+          PY
+          cat 第三年拉面组合评分报告.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 第三年拉面组合评分报告
+          path: 第三年拉面组合评分报告.md
+          retention-days: 30

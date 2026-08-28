@@ -61,6 +61,9 @@ fn main() -> Result<()> {
     let reserve = env_f32("属性空间预留", 40.0)?;
     let bond = env_f32("早期羁绊每点价值", 8.0)?;
     let hint = env_f32("诀窍提示价值", 6.0)?;
+    let weakboost = env_f32("弱训练加成", 0.0)?;
+    let region_weak_cover = env_f32("区域弱覆盖权重", 0.0)?;
+    let eat_requires_covered = env::var("吃面要求覆盖训练").map(|v| v == "1" || v == "true").unwrap_or(false);
     let shard: u64 = env::var("分片序号")?.parse()?;
     let runs: u64 = env::var("每分片局数")?.parse()?;
 
@@ -75,7 +78,7 @@ fn main() -> Result<()> {
     for offset in 0..runs {
         let run_index = shard * runs + offset;
         let base_trainer = LoggingTrainer::new(RecommendedRamenTrainer::new(), run_index);
-        let candidate_trainer = LoggingTrainer::new(RecommendedRamenTrainer::with_experiment_overrides(pt, gap, overflow, sacrifice, window, reserve, bond, hint), run_index);
+        let candidate_trainer = LoggingTrainer::new(RecommendedRamenTrainer::with_experiment_overrides(pt, gap, overflow, sacrifice, window, reserve, bond, hint, weakboost, region_weak_cover, eat_requires_covered), run_index);
         let base = bench::run_seeded(UMA, &deck, &INHERIT, BASE_SEED, run_index, &base_trainer)?;
         let candidate = bench::run_seeded(UMA, &deck, &INHERIT, BASE_SEED, run_index, &candidate_trainer)?;
         let identical = base.score == candidate.score && base.skill_pt == candidate.skill_pt && base.five_status == candidate.five_status;
