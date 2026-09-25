@@ -43,11 +43,12 @@
 
 ### umaai（通道层，`crates/umaai`）
 - **职责**：监听 `thisTurn.json` → 按 `scenarioId` 分发重建游戏 → AI 决策 → sink 输出（屏幕 / stdout JSON）
-- **features**：`release-pause`（发布版出错时暂停等待按键）
+- **features**：`release-pause`（发布版出错时暂停等待按键）；`onnx`（拉面杯神经网络，见「拉面杯神经网络」节）
 - **模块结构**（`src/`）：
   - `main.rs`：薄调度（Args 解析 / 初始化 / watch 循环 + 按 `ParsedGame` 分发 / run_evaluate）
   - `protocol/`：协议层（`mod.rs` 的 `GameStatus` trait + `GameStatusBase` + `extract_scenario_id` / `parse_game_by_scenario` / `ParsedGame`；`onsen.rs` / `ramen.rs` / `story.rs` / `urafile.rs`）
-  - `scenario/`：剧本处理块（`onsen.rs` 的 `process_onsen` / `ramen.rs` 的 `process_ramen`）
+  - `scenario/`：剧本处理块（`onsen.rs` 的 `process_onsen` / `ramen.rs` 的 `process_ramen`，对训练员泛型）
+  - `ramen_nn.rs`：客户端拉面决策器装配（按 `ramen_trainer_policy` 选搜索训练员、网络参考壳或整局网络；`ramen_nn/hint.rs` 与 `ramen_nn/whole.rs`，`onnx` feature）
   - `decision/`：决策后处理（`luck_score.rs` 的 `LuckScoreTracker` / `mod.rs` 的 emit 系列 / `record.rs` 在线记录器 / `zip_export.rs` 局末打包）
   - `plot/`：自绘 SVG（`svg.rs` 构建器 + `luck_trend.rs` 单局趋势图）
   - `utils.rs`：终端热键与保存（`SAVED_GAME` / `handle_f2`）
@@ -99,6 +100,14 @@
 - `game_config.toml [config_override]` 可覆盖为 `false`（回到纯动态估值口径，允许主动跳过价值不足的第 5 次）
 - 该开关经 `main.rs` 传给 `RamenMctsTrainer::with_friend_complete_required`，同时作用于 fallback 手写策略与搜索 rollout 基策（`FlatSearch::with_rollout_trainer`）；`bench_base` 也读该配置（token 里写 `freq` / `freqoff` 时以 token 为准）
 - 跨年配额 preset 为 `[0,3,5]`（`friend_outing_cumulative_caps`：第 1 年不启用 / 第 2 年 3 / 第 3 年补满），实验 token `fcap` 可复现其它档位；成因与代价见 issues.md 对应条目
+
+### 拉面杯神经网络（`ramen_trainer_policy`，umaai）
+- 只作用于客户端实际对局的动作决策；事件选项始终走手写策略，搜索内部模拟仍是手写 rollout
+- `"mcts"`（默认）：既有搜索逻辑
+- `"mcts_nn_hint"`：执行与 `mcts` 完全相同（网络在随机流副本上推理），在 `mcts` 会输出决策的多候选步骤上另挂 `scenario_extra.nn_hint`（网络推荐 + 是否与执行一致），human 模式多打印一行「神经网络参考」；网络推理失败只警告、不影响执行
+- `"nn"`：全部动作决策由网络 argmax 直接给出，不做搜索；来源标签 `decision_source` 区分网络推理 / 自选比赛守门 / 转交手写三类出口；远快于搜索、分数更低，是以分数换速度的选项；只适用于训练覆盖的卡组构成（清单见 `default_config.toml` 注释）
+- 后两项需要 `cargo build --release --features onnx -p umaai`，并设置 `ramen_nn_model_path`（同目录需 `<模型>.onnx.json` 旁车，模型不入库）；未开 feature、缺模型、旁车或图输出契约不符时启动即报错，不回退
+- 模型加载走 `RamenNnTrainer::load`：固定 batch 编译 + 图输出契约校验（单输出 / f32 / `[batch, 245]`）
 
 ## 开发环境
 
@@ -265,6 +274,7 @@ cargo run --release --bin ramen_region_topk -- --help   # 全部参数
 - `policy_schema.rs`：**Policy 头格位冻结**（不吃面 1 + 吃面 200 + … 共 234 格；教师数据按此格位，改动即数据作废）
 - `training_sample.rs`：教师样本容器（复用 `PolicySlots`；落盘格式 pilot 期，勿当契约）
 - `rng_consistency.rs`：三流跨策略一致性测试（层 2 硬指标 / 层 3 隔离性）
+- 测试用 ONNX 模型：workspace 根 `testsupport/onnx_fixture.rs` 当场生成最小模型（umasim / umaai 测试经 `#[path]` 引入，不进正式构建）；依赖真实权重的测试标 `#[ignore]`，显式运行时缺模型即报错
 
 ## 通用游戏模块（`crates/umasim/src/game/`）
 

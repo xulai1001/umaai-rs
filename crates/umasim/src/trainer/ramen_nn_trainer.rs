@@ -135,6 +135,26 @@ pub struct ActionLogit {
     pub logit: f32
 }
 
+/// 一次动作决策由谁定案
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NnVia {
+    /// 跑了一次网络推理，按 policy argmax 选出
+    Network,
+    /// 自选比赛硬守门命中，无视 policy 直接选「比赛」，没有推理
+    RaceGate,
+    /// `SpecialSelect` 按 [`SpecialSelectMode::Handwritten`] 转交手写策略，没有推理
+    Handwritten
+}
+
+/// [`RamenNnTrainer::select_action_labeled`] 的结果：选中的下标与定案来源
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NnPick {
+    /// 选中候选在 `actions` 切片中的下标
+    pub index: usize,
+    /// 这一步由谁定案
+    pub via: NnVia
+}
+
 /// `SpecialSelect` 阶段的推理口径
 ///
 /// 教师在 `RamenSelect` 根上搜的是联合动作（面 × 隐藏风味用法），policy 格位
@@ -149,6 +169,67 @@ pub enum SpecialSelectMode {
     Canonical,
     /// 该阶段整个交给手写策略（对照组，用于给该阶段的可恢复上限定界）
     Handwritten
+}
+
+/// 把 ONNX 文件编译成**固定 batch** 的可运行图
+///
+/// 导出的模型第 0 维是符号 `batch`，tract 在维度未知时拿不到形状特化，优化后的图
+/// 明显更慢。固定后输出逐位不变（见 `test_fixed_shape_matches_symbolic`）。
+///
+/// # 错误
+///
+/// 文件读不出、输入形状与 [`features::INPUT_DIM`] 不符、优化或转换失败，
+/// 或**图的输出契约**与 [`validate_output_contract`] 不符时报错。
+fn build_runnable(model_path: &Path, batch: usize) -> Result<OnnxModel> {
+    ensure!(batch >= 1, "batch 必须 >= 1，实得 {batch}");
+    let plan = tract_onnx::onnx()
+        .model_for_path(model_path)
+        .context("无法读取 ONNX 模型文件")?
+        .with_input_fact(0, f32::fact([batch, features::INPUT_DIM]).into())
+        .context("固定输入形状失败")?
+        .into_optimized()
+        .context("模型优化失败")?
+        .into_runnable()
+        .context("模型转换失败")?;
+    validate_output_contract(&plan, batch)
+        .with_context(|| format!("ONNX 图输出契约校验失败: {}", model_path.display()))?;
+    Ok(plan)
+}
+
+/// 校验**图本身**的输出契约：单输出、f32、形状 `[batch, OUTPUT_DIM]`
+///
+/// 旁车 JSON 里的维度只是声明；图导错（少一个头、多一个输出、dtype 不是 f32）时
+/// 要到第一次推理才会暴露。这里在加载阶段只读图的 fact 做校验，不跑推理。
+///
+/// 输入形状已由 [`build_runnable`] 固定成 `[batch, INPUT_DIM]`，因此这里的输出形状
+/// 必然是具体值；拿不到具体值本身就说明图没能被特化，同样报错。
+///
+/// # 错误
+///
+/// 输出个数不为 1、元素类型不是 f32、形状不是 `[batch, OUTPUT_DIM]`，或输出 fact
+/// 读不出 / 不是具体形状时报错。
+fn validate_output_contract(plan: &OnnxModel, batch: usize) -> Result<()> {
+    let graph = plan.model();
+    ensure!(
+        graph.outputs.len() == 1,
+        "ONNX 图输出个数为 {}，契约要求恰好 1 个（policy {POLICY_DIM} + choice {CHOICE_DIM} + value {VALUE_DIM} 拼成的单张量）",
+        graph.outputs.len()
+    );
+    let fact = graph.output_fact(0).context("读取 ONNX 图输出 fact 失败")?;
+    ensure!(
+        fact.datum_type == f32::datum_type(),
+        "ONNX 图输出元素类型为 {:?}，契约要求 f32",
+        fact.datum_type
+    );
+    let shape = fact
+        .shape
+        .as_concrete()
+        .ok_or_else(|| anyhow!("ONNX 图输出形状未特化为具体值: {:?}", fact.shape))?;
+    ensure!(
+        shape == [batch, OUTPUT_DIM],
+        "ONNX 图输出形状为 {shape:?}，契约要求 [{batch}, {OUTPUT_DIM}]"
+    );
+    Ok(())
 }
 
 /// 拉面杯神经网络训练员
@@ -216,13 +297,7 @@ impl RamenNnTrainer {
         }
 
         log::info!("加载拉面杯 ONNX 模型: {}", model_path.display());
-        let model = tract_onnx::onnx()
-            .model_for_path(model_path)
-            .context("无法读取 ONNX 模型文件")?
-            .into_optimized()
-            .context("模型优化失败")?
-            .into_runnable()
-            .context("模型转换失败")?;
+        let model = build_runnable(model_path, 1)?;
         log::info!("拉面杯 ONNX 模型加载成功");
 
         Ok(Self {
@@ -288,6 +363,47 @@ impl RamenNnTrainer {
     pub fn with_special_mode(mut self, mode: SpecialSelectMode) -> Self {
         self.special_mode = mode;
         self
+    }
+
+    /// 选动作，并照实给出这一步由谁定案
+    ///
+    /// [`Trainer::select_action`] 只是本函数取下标：判定逻辑只有一份，客户端标注来源时
+    /// 不必拿下标反推、也不必再跑一遍守门判定。
+    ///
+    /// # 错误
+    ///
+    /// 推理失败、任一候选无法落格、候选为空，或 [`SpecialSelectMode::Canonical`] 下
+    /// 联合决策根还原失败（阶段不对 / `pending_ramen` 为空）时报错。
+    pub fn select_action_labeled(
+        &self, game: &RamenGame, actions: &[RamenAction], rng: &mut StdRng
+    ) -> Result<NnPick> {
+        ensure!(!actions.is_empty(), "候选动作为空");
+        let stage = ramen_effective_stage(game, actions);
+        // 自选比赛硬守门优先于网络输出：不达标直接育成失败，不是可权衡的价值项
+        if self.race_shield && stage == RamenStage::Train {
+            if let Some(index) = free_race_gate_index(game, actions, race_gate_slack()) {
+                return Ok(NnPick { index, via: NnVia::RaceGate });
+            }
+        }
+        // SpecialSelect 是联合决策的第二拍，推理状态由 special_mode 决定；
+        // 候选合法性与打分一律基于**原局面**，只有喂给模型的那一份被还原
+        let out = if stage == RamenStage::SpecialSelect {
+            match self.special_mode {
+                SpecialSelectMode::Handwritten => {
+                    let index = self.fallback.select_action(game, actions, rng)?;
+                    return Ok(NnPick { index, via: NnVia::Handwritten });
+                }
+                SpecialSelectMode::Canonical => self.infer(&canonical_ramen_select_root(game)?)?,
+                SpecialSelectMode::Raw => self.infer(game)?
+            }
+        } else {
+            self.infer(game)?
+        };
+        let scores = self.score_actions(game, actions, &out.policy)?;
+        Ok(NnPick {
+            index: argmax_logit(&scores)?,
+            via: NnVia::Network
+        })
     }
 
     /// 按当前阶段把每个候选映射到 policy logit
@@ -421,27 +537,7 @@ impl Trainer<RamenGame> for RamenNnTrainer {
     /// 推理失败、任一候选无法落格、候选为空，或 [`SpecialSelectMode::Canonical`] 下
     /// 联合决策根还原失败（阶段不对 / `pending_ramen` 为空）时报错。
     fn select_action(&self, game: &RamenGame, actions: &[RamenAction], rng: &mut StdRng) -> Result<usize> {
-        ensure!(!actions.is_empty(), "候选动作为空");
-        let stage = ramen_effective_stage(game, actions);
-        // 自选比赛硬守门优先于网络输出：不达标直接育成失败，不是可权衡的价值项
-        if self.race_shield && stage == RamenStage::Train {
-            if let Some(idx) = free_race_gate_index(game, actions, race_gate_slack()) {
-                return Ok(idx);
-            }
-        }
-        // SpecialSelect 是联合决策的第二拍，推理状态由 special_mode 决定；
-        // 候选合法性与打分一律基于**原局面**，只有喂给模型的那一份被还原
-        let out = if stage == RamenStage::SpecialSelect {
-            match self.special_mode {
-                SpecialSelectMode::Handwritten => return self.fallback.select_action(game, actions, rng),
-                SpecialSelectMode::Canonical => self.infer(&canonical_ramen_select_root(game)?)?,
-                SpecialSelectMode::Raw => self.infer(game)?
-            }
-        } else {
-            self.infer(game)?
-        };
-        let scores = self.score_actions(game, actions, &out.policy)?;
-        argmax_logit(&scores)
+        Ok(self.select_action_labeled(game, actions, rng)?.index)
     }
 
     /// 事件选项委托给手写策略（choice 头未训练）
@@ -472,7 +568,7 @@ impl Trainer<RamenGame> for RamenNnTrainer {
 #[cfg(test)]
 mod tests {
     use anyhow::{Result, bail};
-    use rand::rngs::StdRng;
+    use rand::{SeedableRng, rngs::StdRng};
 
     use super::*;
     use crate::{
@@ -481,8 +577,25 @@ mod tests {
             ramen::{RamenGame, RamenStage}
         },
         gamedata::init_global,
-        utils::{Checks, get_workspace_root, init_test_logger}
+        utils::{Checks, cleanup_test_dir, get_workspace_root, init_test_logger, unique_test_dir}
     };
+
+    /// 最小 ONNX 模型生成器：workspace 根的 `testsupport/onnx_fixture.rs`
+    ///
+    /// `umasim` 与 `umaai` 两侧**共用同一份**生成器，靠 `#[path]` 各自引入一次：
+    /// 不复制代码、不新增依赖、不做成生产公开 API，也不进入正式构建。
+    #[path = "../../../../../../testsupport/onnx_fixture.rs"]
+    mod onnx_fixture;
+
+
+    /// 与冻结契约一致的旁车 JSON 文本（`input_dim` / `output_dim` 都**声明正确**）
+    fn valid_sidecar_json() -> String {
+        format!(
+            r#"{{"input_dim":{},"output_dim":{},"value_normalization":{{"center":[0.0,0.0,0.0],"scale":[1.0,1.0,1.0]}}}}"#,
+            features::INPUT_DIM,
+            OUTPUT_DIM
+        )
+    }
 
     const TEST_UMA_ID: u32 = 102601;
     const TEST_DECK: [u32; 6] = [302424, 302894, 303044, 302924, 303024, 303054];
@@ -490,6 +603,68 @@ mod tests {
         blue_count: [15, 3, 0, 0, 0],
         extra_count: [0, 30, 0, 0, 30, 30]
     };
+
+    /// **旁车声明正确、ONNX 图输出错**时，必须在 `load` 就报错
+    ///
+    /// fixture 当场生成，旁车 JSON 一律写成正确值，所以报错只可能来自图本身；
+    /// 正向 fixture（`MatMul` 到 `[1,245]`）证明这条校验不会误杀合法图。
+    #[test]
+    fn test_load_rejects_wrong_graph_output_contract() -> Result<()> {
+        let root = get_workspace_root()?;
+        std::env::set_current_dir(&root)?;
+        let _ = init_test_logger("error");
+        let mut c = Checks::new();
+        let dir = unique_test_dir("nn_graph_contract")?;
+        println!("fixture 目录: {}", dir.display());
+
+        let cases: [(&str, Vec<u8>, &str); 3] = [
+            (
+                "wrong_dim",
+                onnx_fixture::identity_model(features::INPUT_DIM),
+                "形状"
+            ),
+            (
+                "two_outputs",
+                onnx_fixture::two_output_model(features::INPUT_DIM),
+                "输出个数"
+            ),
+            (
+                "good",
+                onnx_fixture::matmul_model(features::INPUT_DIM, OUTPUT_DIM),
+                ""
+            )
+        ];
+
+        for (name, bytes, want) in cases {
+            let model = dir.join(format!("{name}.onnx"));
+            let sidecar = dir.join(format!("{name}.onnx.json"));
+            std::fs::write(&model, &bytes)?;
+            std::fs::write(&sidecar, valid_sidecar_json())?;
+            let got = RamenNnTrainer::load(&model);
+            match (want.is_empty(), got) {
+                (false, Err(e)) => {
+                    let msg = format!("{e:#}");
+                    println!("{name} → {msg}");
+                    c.check(msg.contains(want), &format!("{name}: 加载阶段报错且提到「{want}」"));
+                }
+                (false, Ok(_)) => {
+                    c.check(false, &format!("{name}: 图输出不合契约却加载成功"));
+                }
+                (true, Ok(_)) => {
+                    println!("{name} → 加载成功");
+                    c.check(true, &format!("{name}: 合法图（输出 [1,{OUTPUT_DIM}]）正常加载，校验不误杀"));
+                }
+                (true, Err(e)) => {
+                    println!("{name} → {e:#}");
+                    c.check(false, &format!("{name}: 合法图被误杀"));
+                }
+            }
+        }
+
+        cleanup_test_dir(&dir)?;
+        c.check(!dir.exists(), "本次 fixture 目录已清理（且清理前核对过在 target/test-tmp 之下）");
+        c.finish()
+    }
 
     /// 把开局局面推进到第一个真正的决策阶段
     ///
@@ -515,12 +690,17 @@ mod tests {
         bail!("开局推进 16 步仍未到达决策阶段，当前 {:?}", game.stage)
     }
 
-    /// 加载 pilot 模型，在开局第一决策点跑一次 select_action
+    /// 加载真实 pilot 模型，在开局第一决策点跑一次 select_action
     ///
-    /// `saved_models/` 在 `.gitignore` 里，模型不随仓库分发。缺模型时本测试
-    /// **跳过而不是失败**——否则任何没跑过训练管线的机器上
-    /// `cargo test --features onnx` 都会红，而红的原因与代码无关。
+    /// 真实模型集成测试，默认 `#[ignore]`：`value.mean` 落在分数量纲是训练出来的权重
+    /// 才有的性质，生成式 fixture 替代不了。显式运行：
+    /// `cargo test -p umasim --release --lib --features onnx -- --ignored select_action_opening`
+    ///
+    /// # 错误
+    ///
+    /// 显式运行而模型不存在时报错。
     #[test]
+    #[ignore = "需要真实 pilot 模型（saved_models 不入库）；显式 --ignored 运行"]
     fn test_ramen_nn_select_action_opening() -> Result<()> {
         let root = get_workspace_root()?;
         std::env::set_current_dir(&root)?;
@@ -529,10 +709,11 @@ mod tests {
 
         let model_path = root.join("saved_models").join("ramen_pilot").join("model.onnx");
         println!("模型路径: {}", model_path.display());
-        if !model_path.is_file() {
-            println!("跳过：模型不存在（saved_models 不入库，需先跑 scripts/ramen_nn 导出）");
-            return Ok(());
-        }
+        ensure!(
+            model_path.is_file(),
+            "本测试需要真实模型 {}，但它不存在；本测试是显式运行的，不会静默跳过",
+            model_path.display()
+        );
         let trainer = RamenNnTrainer::load(&model_path)?;
 
         let (mut rng, rule_master) = crate::bench::seeded_rngs(42, 0);
@@ -565,4 +746,72 @@ mod tests {
         c.check(scores.iter().all(|s| s.logit.is_finite()), "各候选 logit 均为有限值");
         c.finish()
     }
+
+    /// 固定输入形状后，输出必须与符号 batch 图**逐位一致**
+    ///
+    /// [`build_runnable`] 把第 0 维从符号 `batch` 钉成 1，而 tract 的形状特化会改变
+    /// 算子选择与融合方式；输出差一个 ulp 就可能让 argmax 在打平处翻面，因此逐位比对。
+    ///
+    /// 覆盖真实轨迹上的多个局面，而不是零输入：形状特化的差异往往只在特定
+    /// 数值区间显形。
+    /// 真实模型集成测试，默认 `#[ignore]`：生成式 fixture 的输出恒为 0，逐位相等恒成立，
+    /// 没有区分度。显式运行：
+    /// `cargo test -p umasim --release --lib --features onnx -- --ignored fixed_shape`
+    ///
+    /// # 错误
+    ///
+    /// 显式运行而模型不存在时报错。
+    #[test]
+    #[ignore = "需要真实模型 saved_models/dagger/ens_d3.onnx；显式 --ignored 运行"]
+    fn test_fixed_shape_matches_symbolic() -> Result<()> {
+        use tract_ndarray::Array2;
+
+        let workspace_root = get_workspace_root()?;
+        std::env::set_current_dir(workspace_root)?;
+        let _ = init_test_logger("error");
+        let _ = init_global();
+
+        let mut c = Checks::new();
+        let path = std::path::Path::new("saved_models/dagger/ens_d3.onnx");
+        ensure!(
+            path.is_file(),
+            "本测试需要真实模型 {}，但它不存在；本测试是显式运行的，不会静默跳过",
+            path.display()
+        );
+
+        let symbolic = tract_onnx::onnx()
+            .model_for_path(path)?
+            .into_optimized()?
+            .into_runnable()?;
+        let fixed = build_runnable(path, 1)?;
+
+        // 沿真实轨迹取局面：用网络自己往前走，覆盖各个阶段
+        let trainer = RamenNnTrainer::load(path)?;
+        let mut rng = StdRng::seed_from_u64(42);
+        let mut game = RamenGame::newgame(TEST_UMA_ID, &TEST_DECK, TEST_INHERIT)?;
+        let mut checked = 0usize;
+        let mut max_abs_diff = 0.0f32;
+        let mut stages = Vec::new();
+        while game.next() && checked < 24 {
+            let feats = encode(&game)?;
+            let input = Array2::<f32>::from_shape_vec((1, features::INPUT_DIM), feats)?;
+            let a = symbolic.run(tvec!(input.clone().into_tvalue()))?;
+            let b = fixed.run(tvec!(input.into_tvalue()))?;
+            let va = a[0].to_array_view::<f32>()?;
+            let vb = b[0].to_array_view::<f32>()?;
+            for (x, y) in va.iter().zip(vb.iter()) {
+                max_abs_diff = max_abs_diff.max((x - y).abs());
+            }
+            stages.push(format!("{:?}", game.stage));
+            checked += 1;
+            game.run_stage(&trainer, &mut rng)?;
+        }
+        println!("比对 {checked} 个局面，阶段：{stages:?}");
+        println!("最大逐元素绝对差 = {max_abs_diff:e}");
+        c.check(checked >= 8, "至少覆盖 8 个局面");
+        c.check(max_abs_diff == 0.0, "固定形状与符号 batch 输出逐位一致");
+        c.finish()
+    }
+
+
 }

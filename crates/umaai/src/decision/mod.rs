@@ -14,6 +14,7 @@ pub mod zip_export;
 
 use std::sync::{Arc, Mutex};
 
+use serde_json::{Map, Value, json, to_value};
 use umasim::{
     game::{Game, Trainer},
     gamedata::GAMECONSTANTS,
@@ -133,7 +134,7 @@ pub fn emit_with_luck_decision<G: Game>(
     );
 
     // 每候选 action_luck：T(n, action_i) - T(n)（AIRedirector 关心，玩家模式跳过）
-    let action_luck = serde_json::json!(
+    let action_luck = json!(
         info.candidate_scores
             .iter()
             .enumerate()
@@ -146,26 +147,30 @@ pub fn emit_with_luck_decision<G: Game>(
 
     // 挂载 scenario_extra：snapshot + action_luck（必挂）+ reason（仅拉面 MCTS）+
     // ramen_action（仅 ramen 路径）
-    let extra = match serde_json::to_value(tracker.snapshot()) {
-        Ok(mut v) => {
-            if let Some(obj) = v.as_object_mut() {
-                obj.insert("action_luck".into(), action_luck);
-                // reason：拉面 MCTS 路径挂，其他 trainer 不挂
-                if let Some(data) = reason_data {
-                    if let Ok(reason_v) = serde_json::to_value(data) {
-                        obj.insert("reason".into(), reason_v);
-                    }
-                }
-                // ramen_action：仅 ramen 路径填（"吃面/X(替换Ax1+Bx2)" 等）
-                if let Some(action_text) = ramen_action {
-                    obj.insert("ramen_action".into(), action_text.into());
-                }
-            }
-            Some(v)
-        }
-        Err(_) => None
+    //
+    // 合并而不是覆盖：决策本身可能已带信息（网络模式的 `decision_source`、
+    // `mcts_nn_hint` 的参考推荐），以它为底再盖上 luck 相关键，键名冲突时以 luck 为准。
+    let mut merged = match info.scenario_extra.take() {
+        Some(Value::Object(map)) => map,
+        _ => Map::new()
     };
-    info.scenario_extra = extra;
+    if let Ok(Value::Object(snapshot)) = to_value(tracker.snapshot()) {
+        for (k, v) in snapshot {
+            merged.insert(k, v);
+        }
+    }
+    merged.insert("action_luck".into(), action_luck);
+    // reason：拉面 MCTS 路径挂，其他 trainer 不挂
+    if let Some(data) = reason_data {
+        if let Ok(reason_v) = to_value(data) {
+            merged.insert("reason".into(), reason_v);
+        }
+    }
+    // ramen_action：仅 ramen 路径填（"吃面/X(替换Ax1+Bx2)" 等）
+    if let Some(action_text) = ramen_action {
+        merged.insert("ramen_action".into(), action_text.into());
+    }
+    info.scenario_extra = Some(Value::Object(merged));
 
     sink.emit(&info, &game.view());
 }

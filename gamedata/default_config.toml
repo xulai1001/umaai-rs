@@ -63,6 +63,20 @@ ramen_region_strategy = "all"
 # 仅当 ramen_region_strategy="fixed" 时生效
 ramen_region_fixed = [[11, 14, 15]]
 
+# 拉面杯客户端的动作决策由谁负责（事件选项始终走手写策略）：
+#   "mcts"（默认）：既有逻辑，按 [mcts] 配置搜索
+#   "mcts_nn_hint"：执行与 mcts 相同，另外在每个动作决策下显示一行神经网络的推荐作参考
+#   "nn"：全部动作决策由神经网络直接给出，不做搜索，以分数换速度（模型仍在迭代中）
+#         仅适用于训练覆盖的卡组构成（各带 1 张友人卡）：2速2耐1智 / 2速1耐1力1智 / 3速1耐1智 /
+#         2速1耐2智 / 2速1力1根1智；训练卡池外的卡在数值足够强时表现良好，其他构成效果未知
+#         对照 MCTS（search_n=1024）实测：快约 90 倍，分数低约 1.1k~2.1k（95% 区间）
+# 后两项需要 onnx feature 构建（cargo build --release --features onnx -p umaai）
+# 以及 ramen_nn_model_path。
+ramen_trainer_policy = "mcts"
+# 拉面杯网络模型路径，需同目录存在同名 .json 旁车（<模型>.onnx.json）。
+# 与 neuralnet_model_path 是不同的模型，不可混填。模型不随仓库发布。
+# ramen_nn_model_path = "saved_models/<模型>.onnx"
+
 # 拉面手写策略：为多拿总 PT 最多愿意牺牲的总评分（评分换 PT，顶层可调）
 # 只影响"训练位主属性已满"的训练候选（终盘最常见）：属性收益为 0 时只剩 PT，
 # 本值决定策略还愿不愿意练它。0 = 评分优先（默认，实测评分峰值）；越大越偏

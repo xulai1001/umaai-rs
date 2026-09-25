@@ -184,6 +184,71 @@ pub fn get_workspace_root() -> Result<std::path::PathBuf> {
     Ok(workspace_root.to_path_buf())
 }
 
+/// 本次测试专属的临时目录（工作区 `target/test-tmp/` 下，每次调用唯一）
+///
+/// 不用系统临时目录的固定名字：`std::env::temp_dir()` 下写死名字时，
+/// 同机并行跑的多个测试进程（`cargo test` 的多 target、或两个终端同时跑）会写到
+/// 同一个路径上互相覆盖模型与旁车，出现「A 进程刚写完 B 进程就删掉」的假失败；
+/// 而且清理时容易越界删到工作区以外。
+///
+/// 目录名为 `<tag>-<pid>-<纳秒>-<进程内序号>`，进程内序号保证同一进程里连续两次
+/// 调用也不撞名。目录建在工作区 `target/` 下——`target/` 本来就是构建产物区，
+/// 已被 `.gitignore` 覆盖，清理范围也天然限制在工作区内。
+///
+/// # 错误
+///
+/// 定位工作区根目录失败、取系统时间失败或建目录失败时报错。
+#[cfg(test)]
+pub fn unique_test_dir(tag: &str) -> Result<std::path::PathBuf> {
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH}
+    };
+
+    /// 进程内自增序号：同一纳秒内的两次调用也不会撞名
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| anyhow!("取系统时间失败: {e}"))?
+        .as_nanos();
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = get_workspace_root()?
+        .join("target")
+        .join("test-tmp")
+        .join(format!("{tag}-{}-{nanos}-{seq}", std::process::id()));
+    fs_err::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// 删除 [`unique_test_dir`] 建出来的目录，并**先核对它确实在预期范围内**
+///
+/// 只接受绝对路径且必须位于工作区 `target/test-tmp/` 之下；不满足时
+/// **不删除**并报错——宁可留下垃圾目录，也不冒险递归删到别处。
+///
+/// # 错误
+///
+/// 路径不在 `target/test-tmp/` 之下，或删除失败时报错。
+#[cfg(test)]
+pub fn cleanup_test_dir(dir: &std::path::Path) -> Result<()> {
+    let base = get_workspace_root()?.join("target").join("test-tmp");
+    let abs = dir
+        .canonicalize()
+        .map_err(|e| anyhow!("无法规范化待删目录 {}: {e}", dir.display()))?;
+    let base_abs = base
+        .canonicalize()
+        .map_err(|e| anyhow!("无法规范化 test-tmp 基准目录 {}: {e}", base.display()))?;
+    if !abs.starts_with(&base_abs) || abs == base_abs {
+        return Err(anyhow!(
+            "拒绝删除 {}：不在 {} 之下（只清理本次建出来的子目录）",
+            abs.display(),
+            base_abs.display()
+        ));
+    }
+    fs_err::remove_dir_all(&abs)?;
+    Ok(())
+}
+
 /// 测试观测收集器：全程只打印，末尾汇总失败
 ///
 /// `AGENTS.md` 规定测试用 `println` 而非 `assert` 宏——中途 panic 会丢掉后续诊断信息。
@@ -459,6 +524,8 @@ pub(crate) fn fallback_override_game_config() -> OverrideGameConfig {
         mcts: OverrideMctsConfig::default(),
         ramen_region_strategy: None,
         ramen_region_fixed: None,
+        ramen_trainer_policy: None,
+        ramen_nn_model_path: None
     }
 }
 

@@ -38,7 +38,11 @@
 //! 和 `Arc<StdoutJsonSink>`（info/error 用），human 模式下不需要后者。
 
 use colored::Colorize;
-use crate::output::{DecisionInfo, view::GameView};
+use crate::output::{
+    DecisionInfo,
+    decision::{NN_HINT_KEY, SOURCE_RAMEN_NN, SOURCE_RAMEN_RACE_GATE},
+    view::GameView
+};
 
 /// AI 决策的输出契约
 ///
@@ -83,17 +87,40 @@ impl DecisionSink for EmptySink {
 /// 决定要不要打 round header）。
 pub struct HumanReadableSink;
 
-impl DecisionSink for HumanReadableSink {
-    fn emit(&self, info: &DecisionInfo, _view: &GameView) {
+impl HumanReadableSink {
+    /// 无搜索评分决策的来源文案：网络模式的三类出口分别标注，其余沿用「手写逻辑」
+    fn source_text(info: &DecisionInfo) -> &'static str {
+        match info.source_label() {
+            Some(SOURCE_RAMEN_NN) => "神经网络",
+            Some(SOURCE_RAMEN_RACE_GATE) => "自选比赛守门",
+            // 未标注（上游既有路径）与网络模式下转交手写的阶段
+            _ => "手写逻辑"
+        }
+    }
+
+    /// `mcts_nn_hint` 模式下的参考行；决策上没挂参考时为 `None`
+    fn nn_hint_line(info: &DecisionInfo) -> Option<String> {
+        let hint = info.scenario_extra.as_ref()?.get(NN_HINT_KEY)?;
+        let choice = hint.get("choice")?.as_str()?;
+        let verdict = match hint.get("same_as_executed").and_then(|v| v.as_bool()) {
+            Some(true) => "与推荐相同",
+            _ => "与推荐不同"
+        };
+        Some(format!("神经网络参考：{choice}（{verdict}）"))
+    }
+
+    /// 渲染决策本身（首选 / luck 行）
+    fn render_decision(info: &DecisionInfo) {
         // 手写 fallback 决策（`candidate_scores` 为空）：
         // - 默认配置 `ramen_search_stages="train,ramen"` 下 region 未开启 → 地区选择走手写逻辑
         // - **比赛回合单候选**（`Train` 且 `is_race_turn`，无搜索评分）
         // - RamenSelect 合并候选 ≤ 1 / 单候选短路回落三阶段路径
         // 它们没有搜索评分，luck 行的「期望评分」只是回合加成的换算、运气恒 0，混入会误导，
         // 故统一显示所选动作并标注【手写逻辑】、跳过 luck 行（JSON 模式下全量字段照常输出）。
+        // 网络模式下的决策同样无搜索评分，按来源标签标注。
         if info.candidate_scores.is_empty() {
             if let Some(desc) = info.candidate_descriptions.get(info.action_index) {
-                println!("{}", format!("选择{desc}（手写逻辑）").magenta());
+                println!("{}", format!("选择{desc}（{}）", Self::source_text(info)).magenta());
             }
             return;
         }
@@ -126,6 +153,15 @@ impl DecisionSink for HumanReadableSink {
             _ => total.bright_green()
         };
         println!("期望评分 {exp} 运气: 本局 {total_colored}, 本回合 {turn}");
+    }
+}
+
+impl DecisionSink for HumanReadableSink {
+    fn emit(&self, info: &DecisionInfo, _view: &GameView) {
+        Self::render_decision(info);
+        if let Some(line) = Self::nn_hint_line(info) {
+            println!("{}", line.bright_cyan());
+        }
     }
 }
 
@@ -240,7 +276,10 @@ impl StdoutJsonSink {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
+    use crate::{output::decision::SOURCE_RAMEN_HANDWRITTEN_STAGE, utils::Checks};
 
     /// 构造一个最小可用的 DecisionInfo 用于测试
     ///
@@ -260,6 +299,53 @@ mod tests {
         ];
         info.candidate_n = vec![1024, 800, 256];
         info
+    }
+
+    /// 无评分决策的来源文案：网络的三类出口分别标注，未标注时与上游一致为「手写逻辑」
+    #[test]
+    fn test_source_text() -> Result<()> {
+        let mut c = Checks::new();
+        let text = |src: Option<&str>| {
+            let info = DecisionInfo::from_index(0);
+            HumanReadableSink::source_text(&match src {
+                Some(s) => info.with_source(s),
+                None => info
+            })
+        };
+        for (src, want) in [
+            (None, "手写逻辑"),
+            (Some(SOURCE_RAMEN_NN), "神经网络"),
+            (Some(SOURCE_RAMEN_RACE_GATE), "自选比赛守门"),
+            (Some(SOURCE_RAMEN_HANDWRITTEN_STAGE), "手写逻辑")
+        ] {
+            println!("{src:?} → {}", text(src));
+            c.check(text(src) == want, &format!("{src:?} 标注为「{want}」"));
+        }
+        c.finish()
+    }
+
+    /// 网络参考行：挂了参考才出现，并如实给出是否与推荐相同
+    #[test]
+    fn test_nn_hint_line() -> Result<()> {
+        let mut c = Checks::new();
+        let with_hint = |same: bool| {
+            let mut info = sample_info();
+            info.scenario_extra = Some(serde_json::json!({
+                NN_HINT_KEY: {"choice": "速度训练", "same_as_executed": same}
+            }));
+            info
+        };
+        let same = HumanReadableSink::nn_hint_line(&with_hint(true));
+        let diff = HumanReadableSink::nn_hint_line(&with_hint(false));
+        let none = HumanReadableSink::nn_hint_line(&sample_info());
+        println!("相同 → {same:?}
+不同 → {diff:?}
+无参考 → {none:?}");
+        c.check(same.as_deref() == Some("神经网络参考：速度训练（与推荐相同）"), "相同时的参考行");
+        c.check(diff.as_deref() == Some("神经网络参考：速度训练（与推荐不同）"), "不同时的参考行");
+        c.check(none.is_none(), "没挂参考时不出参考行");
+        HumanReadableSink.emit(&with_hint(false), &GameView::default());
+        c.finish()
     }
 
     /// EmptySink 不 panic 即过（静默丢弃，无副作用可断言）

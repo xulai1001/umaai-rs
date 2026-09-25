@@ -5,6 +5,9 @@
 # ---------- 拉面杯第3年地区选择策略（**顶层覆盖**；fixed 仅第3年生效）----------
 ramen_region_strategy = "all"   # "all"（默认）/"fixed"（仅第3年，跳过 120 组合枚举）
 # ramen_region_fixed = [[10, 12, 14]]   # 仅当 fixed 时生效，长度必须 = 1
+# 拉面杯神经网络（需 onnx 构建，说明见 default_config.toml）："mcts"（默认）/"mcts_nn_hint"/"nn"
+# ramen_trainer_policy = "mcts_nn_hint"
+# ramen_nn_model_path = "saved_models/<模型>.onnx"
 
 # ---------- 常用区：[config_override] 段 ----------
 [config_override]

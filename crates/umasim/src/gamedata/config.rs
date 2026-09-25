@@ -624,6 +624,15 @@ pub struct GameConfig {
     /// 例如 `[[10, 12, 14]]`：第3年固定选 [10,12,14]
     #[serde(default)]
     pub ramen_region_fixed: Option<Vec<[usize; 3]>>,
+    /// 拉面杯客户端动作决策由谁负责（默认 `mcts`，见 [`RamenTrainerPolicy`]）
+    #[serde(default)]
+    pub ramen_trainer_policy: RamenTrainerPolicy,
+    /// 拉面杯网络模型路径（`ramen_trainer_policy` 不是 `mcts` 时生效）
+    ///
+    /// 需同目录存在同名 `.json` 旁车（`<model>.onnx.json`）。与温泉的
+    /// [`Self::neuralnet_model_path`] 是两个不同的模型，不可混用。
+    #[serde(default)]
+    pub ramen_nn_model_path: Option<String>,
     /// 在线决策记录开关（默认开；仅 umaai 实时运行使用，离线 sim/bench 不读）
     ///
     /// 开时按局落盘 `logs/game{id}/`：`thisTurn.json` 原文 + `decisions.csv` +
@@ -700,6 +709,8 @@ impl GameConfig {
             race_grades: default_race_grades(),
             ramen_region_strategy: RamenRegionStrategy::default(),
             ramen_region_fixed: None,
+            ramen_trainer_policy: RamenTrainerPolicy::default(),
+            ramen_nn_model_path: None,
             luck_record: default_luck_record(),
             friend_complete_required: default_friend_complete()
         }
@@ -811,6 +822,36 @@ pub enum RamenRegionStrategy {
     Fixed
 }
 
+/// 拉面杯客户端动作决策由谁负责
+///
+/// 只作用于 umaai 客户端的实际对局；事件选项在三种取值下都走手写策略。
+///
+/// - `mcts`（默认）：既有逻辑，按 `[mcts]` 配置搜索。
+/// - `mcts_nn_hint`：执行与 `mcts` 完全相同，另外在每个动作决策上显示网络的推荐作参考。
+/// - `nn`：全部动作决策由 `ramen_nn_model_path` 指定的网络直接给出，不做任何搜索；
+///   比搜索快得多、分数更低，是以分数换速度的选项。只适用于训练覆盖的卡组构成，
+///   见 `gamedata/default_config.toml` 的说明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RamenTrainerPolicy {
+    /// 既有搜索逻辑
+    #[default]
+    #[serde(rename = "mcts")]
+    Mcts,
+    /// 执行既有搜索逻辑，另外显示网络推荐
+    #[serde(rename = "mcts_nn_hint")]
+    MctsNnHint,
+    /// 全部动作决策由网络直接给出
+    #[serde(rename = "nn")]
+    Nn
+}
+
+impl RamenTrainerPolicy {
+    /// 是否需要加载网络模型（除 `mcts` 外都需要）
+    pub fn needs_model(self) -> bool {
+        !matches!(self, Self::Mcts)
+    }
+}
+
 /// 策略参数（手写/未来模型策略参数）
 ///
 /// 当前承载拉面杯第3年地区选择策略；后续扩展可加入超级拉面选择策略、未来模型策略参数等。
@@ -887,6 +928,17 @@ pub struct OverrideGameConfig {
     /// 要显式清空 default 的 fixed 组合可写空数组 `[]`。
     #[serde(default)]
     pub ramen_region_fixed: Option<Vec<[usize; 3]>>,
+    /// 动作决策来源（顶层覆盖；对应 `GameConfig::ramen_trainer_policy`）
+    ///
+    /// `None` = 不覆盖 default_config.toml（即保持 `mcts`）。
+    #[serde(default)]
+    pub ramen_trainer_policy: Option<RamenTrainerPolicy>,
+    /// 网络模型路径（顶层覆盖；对应 `GameConfig::ramen_nn_model_path`）
+    ///
+    /// `None` = 不覆盖 default。模型不随仓库发布，填本机路径（绝对路径或相对
+    /// workspace 根目录）。
+    #[serde(default)]
+    pub ramen_nn_model_path: Option<String>
 }
 
 /// MCTS 覆盖配置：每个字段都是可选覆盖（`None` = 不覆盖 `default_config.toml`）。
@@ -1088,6 +1140,12 @@ impl OverrideGameConfig {
         if let Some(v) = self.ramen_region_fixed {
             ret.ramen_region_fixed = Some(v);
         }
+        if let Some(v) = self.ramen_trainer_policy {
+            ret.ramen_trainer_policy = v;
+        }
+        if let Some(v) = self.ramen_nn_model_path {
+            ret.ramen_nn_model_path = Some(v);
+        }
         ret
     }
 }
@@ -1131,6 +1189,8 @@ mod tests {
             mcts: OverrideMctsConfig::default(),
             ramen_region_strategy: None,
             ramen_region_fixed: None,
+            ramen_trainer_policy: None,
+            ramen_nn_model_path: None
         }
     }
 

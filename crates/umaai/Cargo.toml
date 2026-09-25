@@ -20,6 +20,9 @@ libc = "0.2.189"
 # 发布给用户的二进制必须启用此 feature，否则出错时不会暂停（CI / 自动化场景
 # 会因 stdin 等待而卡住）。发布构建：`cargo build --release --features release-pause`
 release-pause = []
+# 拉面杯神经网络（`ramen_trainer_policy = "nn"` / `"mcts_nn_hint"`）需要此 feature。
+# 不进 default：默认构建不引入推理后端，选了网络时启动报错。
+onnx = ["umasim/onnx"]
 
 [dependencies]
 # AI 助手 binary：PC 通道层需要终端交互与彩色输出，启用 cli。

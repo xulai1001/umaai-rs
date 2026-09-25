@@ -84,7 +84,51 @@ pub struct DecisionInfo {
     pub scenario_extra: Option<serde_json::Value>
 }
 
+/// 决策来源标签：网络推理选出的动作（`ramen_trainer_policy = "nn"`，见 `umaai::ramen_nn`）
+pub const SOURCE_RAMEN_NN: &str = "ramen_nn";
+
+/// 决策来源标签：网络模式下自选比赛硬守门命中，直接选「比赛」，没有推理
+pub const SOURCE_RAMEN_RACE_GATE: &str = "ramen_race_gate";
+
+/// 决策来源标签：网络模式下该阶段转交手写策略，没有推理
+pub const SOURCE_RAMEN_HANDWRITTEN_STAGE: &str = "ramen_handwritten_stage";
+
+/// [`DecisionInfo::scenario_extra`] 里承载网络参考推荐的键名（`mcts_nn_hint` 模式）
+///
+/// 值为 `{"choice": 网络推荐的动作文本, "same_as_executed": 是否与执行推荐相同}`。
+pub const NN_HINT_KEY: &str = "nn_hint";
+
 impl DecisionInfo {
+    /// [`Self::scenario_extra`] 里承载决策来源的键名
+    pub const SOURCE_KEY: &'static str = "decision_source";
+
+    /// 标注本条决策由谁做出
+    ///
+    /// 只写 `scenario_extra` 里的来源键，不改任何评分字段。`scenario_extra` 已是
+    /// JSON 对象时就地插入，否则新建一个只含该键的对象。
+    pub fn with_source(mut self, label: &str) -> Self {
+        let value = serde_json::Value::String(label.to_string());
+        match self.scenario_extra {
+            Some(serde_json::Value::Object(ref mut map)) => {
+                map.insert(Self::SOURCE_KEY.to_string(), value);
+            }
+            _ => {
+                let mut map = serde_json::Map::new();
+                map.insert(Self::SOURCE_KEY.to_string(), value);
+                self.scenario_extra = Some(serde_json::Value::Object(map));
+            }
+        }
+        self
+    }
+
+    /// 读取决策来源标签；未标注时为 `None`
+    pub fn source_label(&self) -> Option<&str> {
+        self.scenario_extra
+            .as_ref()?
+            .get(Self::SOURCE_KEY)?
+            .as_str()
+    }
+
     /// 构造一个最小可用的 `DecisionInfo`（仅含 action_index）
     pub fn from_index(action_index: usize) -> Self {
         Self {
@@ -105,7 +149,10 @@ impl DecisionInfo {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
+    use crate::utils::Checks;
 
     /// 简化后字段集：7 个（action_index / score / decision_kind / candidate_scores /
     /// candidate_descriptions / candidate_n / scenario_extra）——旧 stub 字段
@@ -120,6 +167,40 @@ mod tests {
         assert!(info.candidate_descriptions.is_empty());
         assert!(info.candidate_n.is_empty(), "默认无局数概念");
         assert!(info.scenario_extra.is_none());
+    }
+
+    /// 来源标签：写入 / 读出 / 未标注为 None，且不动评分字段与已有键
+    #[test]
+    fn test_source_label_roundtrip() -> Result<()> {
+        let mut c = Checks::new();
+        let bare = DecisionInfo::from_index(3);
+        println!("未标注 → {:?}", bare.source_label());
+        c.check(bare.source_label().is_none(), "未标注时来源为 None");
+
+        let tagged = DecisionInfo {
+            action_index: 3,
+            candidate_descriptions: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            ..DecisionInfo::default()
+        }
+        .with_source(SOURCE_RAMEN_NN);
+        println!("标注后 → {:?}", tagged.source_label());
+        c.check(tagged.source_label() == Some(SOURCE_RAMEN_NN), "标注后读回同一标签");
+        c.check(tagged.candidate_scores.is_empty() && tagged.score == 0.0, "标注来源不改评分字段");
+
+        let merged = DecisionInfo {
+            scenario_extra: Some(serde_json::json!({"ramen_action": "吃面/札幌"})),
+            ..DecisionInfo::default()
+        }
+        .with_source(SOURCE_RAMEN_NN);
+        let kept = merged
+            .scenario_extra
+            .as_ref()
+            .and_then(|v| v.get("ramen_action"))
+            .and_then(|v| v.as_str());
+        println!("已有键 → {kept:?}");
+        c.check(kept == Some("吃面/札幌"), "已有 scenario_extra 的键不丢");
+        c.check(merged.source_label() == Some(SOURCE_RAMEN_NN), "已有对象上也能读回标签");
+        c.finish()
     }
 
     #[test]
