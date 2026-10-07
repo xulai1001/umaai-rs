@@ -66,6 +66,8 @@
 做面后，仅在当回合内享受拉面提供的加成效果。加成效果为：基础效果`ramen_basic_effect`和地区效果`ramen_region_effect`的和.
 **PT 增量/eat_count 延后到 NextTurn 阶段**：`ground_ramen_effects`（SpecialSelect→Train 过渡时触发）只设 `current_ramen` / 消耗诀窍 / 生成分身 / 羁绊效果，不立即累加 `scenario_pt` 也不 `eat_count += 1`——这两步统一在 `Game::next()` 的 `NextTurn` 阶段（清空 `current_ramen` 之前）做。这样训练阶段的 `calc_ramen_training_effect` 读到的是「吃面前」的 `scenario_pt`，`ramen_pt_effect` / `region_bonus` 档位不会因本次吃面立即跨档抬升；PT 增量的档位收益从下一回合才参与计算。RMJ 归档与 `check_rmj` 看到的是吃面后 PT，行为不变。
 
+> **显示层 vs 结算层（2026-10-07 补充）**：游戏内是「先按前一档算效果数值，再增加并显示地区面板」——面板 / `active_effect_array` 显示的是**吃面后**档位（含本次吃面新增 PT），但公式（结算层）用的是**吃面前** PT。因此 `umaai` 从协议快照（协议 `scenario_pt` 为吃面后值）重建局面时需回退到吃面前 PT（`into_game` 内 `restore_pre_eat_pt`），与引擎语义对齐；面板值看着像吃面后，属显示层与公式不同步。
+
 ### 剧本点数（ramen_pt）
 剧本点数影响剧本的`全局加成`，初始为0，每次做面都会增加剧本点数。
 增加量随`年份`和`当年内做面次数`增加，记录在`gain_pt_base`和`gain_pt_delta`中。叠加5次后，这个增量不再增加，下一年重置。
@@ -102,8 +104,12 @@
 记载选择地区拉面的额外效果。基础值记录在`ramen_region_effect`
 地区效果的选择和年份有关，第1-2年，对应id: 0-9；第3年，对应id: 10-19。
 每一年地区的选择范围固定，玩家需要从中选择3个地区，对应不同的拉面效果。接下来直到当年底都只能使用这三种拉面
-地区效果中，`友情`和`PT加成`会随着`当年内获得的剧本点数`增加而增加。增加量记录在`region_bonus`中。每获得300点剧本PT，提升一档。
-例如，第3年，札幌的地区效果为 `id=10, youqing=50, pt_bonus=50`，在当年内获得1000点剧本PT时，region_bonus=7，总效果为 `youqing=57, pt_bonus=57`。
+地区效果中，`友情`和`PT加成`会随着`当年内获得的剧本点数`增加而增加。增加量记录在`region_bonus`中：`scenario_pt` 每满 **1000** 点提升一档（`region_bonus[pt/1000]`，上限 5 档，取值 0/3/5/7/9/10）。
+例如，第3年，札幌的地区效果为 `id=10, youqing=50, pt_bonus=50`，在当年内获得1000点剧本PT时，region_bonus=3，面板总效果为 `youqing=53, pt_bonus=53`。
+
+> 口径校准（2026-10-07，game6261 第3年 `active_effect_array` 反推）：`pt=500→0 / 1650→3 / 2300→5 / 3000→7`，即按 **1000 点一档**（旧述「每300点」有误）。
+> 另注：面板/`active_effect_array` 会把 `region_bonus` 同时加到 `youqing` 与 `pt_bonus`，但**属性与 PT 的上层公式使用的 pt_bonus 只取 region 基础值（不含 region_bonus）**；`youqing` 则含 region_bonus。
+> 且 **PT 口径（2026-10-07 定稿，M2）**：友情加成正常情况下**同时作用于属性与 PT**，PT 上层公式**不剔除** RMJ 结算的友情（推翻早前 M1「RMJ 友情只作用于属性」的方案）。另：吃面回合的 `ramen_pt_effect` / `region_bonus` 档位按**吃面前** `scenario_pt` 取（见「拉面（做面/吃面）」节的显示层说明）。
 
 ### 超级拉面(super_ramen)
 在URA回合（回合72-77），每回合自动享受超级拉面效果，记录在`finals_effect`中
@@ -116,13 +122,15 @@
   - `finals_effect.base` 效果生效（友情+150 等）
   - `finals_effect.extra` 效果仅在支援卡种类 >= 4 时生效（PT+100 / PT上限+100 / 分身+1）
 * 净训练效果（第3年RMJ成功、支援卡种类>=4）：`xunlian=0`、`youqing=175`（RMJ 25 + finals 150）、`pt_bonus=100`、`pt_limit=100`
-* 上层数值上限（`status_limit`）：选中选项（`training_limit_options[super_ramen]`）覆盖的 4 个训练位 **+100**（对属性和 PT 上限都生效；未选选项/选项越界则不生效）
+* 上层属性数值上限（`status_limit`）：选中选项（`training_limit_options[super_ramen]`）覆盖的 4 个训练位 **+100**（**仅抬属性上限**；未选选项/选项越界则不生效）
+  * 原始资料写作「○○以外**獲得上限**+100」（属性），与 extra 的「**SP獲得上限**+100」（PT）是两个独立口径：超级拉面的属性上限走选项、PT 上限走 extra，各 +100，互不叠加
 
 **finals_effect.base 自动应用**（每个 URA 回合 Begin 阶段）：
 - `vital`（体力恢复，+20）：每个 URA 回合（turn=72-77）都生效，每回合 +20
 - `motivation`（干劲提升，+1）：每个 URA 回合都生效，每回合 +1
-- `saihou`（赛后加成，+100）：**仅 turn=72 一次性 +100**，之后回合（turn=73-77）保留已生效值，不重复累加
-  - 实现：`self.uma.race_bonus += finals.base.saihou`（仅在 `self.base.turn == 72` 时执行一次）
+- `saihou`（赛后加成，+100）：**仅一次性 +100**，之后回合（turn=73-77）保留已生效值，不重复累加
+  - 实现：`RamenGame::apply_super_ramen_saihou()`——**幂等**（`turn>=72` 且已选超级拉面时 `uma.race_bonus += finals.base.saihou`），由非序列化标记 `super_ramen_saihou_applied` 保证合计只生效一次
+  - 调用点：模拟路径在 turn 72 进入超级拉面时经 `run_begin`；**协议重放路径**在 `GameStatusRamen::into_game` 补调（协议帧不含 `raceBonus`，不补会让 URA 段比赛收益按 ×1.55 而非 ×2.55 被系统性低估）
   - 例如初始 race_bonus=60（来自支援卡），turn=72 后变为 60+100=160，turn=73-77 比赛都用 160 乘算
 
 ### NPC
@@ -285,7 +293,10 @@ ramen_memo里记录的典型的分配结果为：（左-总消耗，右-分配�
 - 训练加成 xunlian: ramen_pt_effect, ramen_basic_effect, ramen_region_effect, 求和（超级拉面期间恒为 0）
 - 友情加成 youqing: 来自 ramen_success_effect / ramen_fail_effect, ramen_basic_effect, ramen_region_effect 求和。仅在友情训练时生效，非友情训练时 youqing=0（超级拉面期间只来自 ramen_success/fail_effect + finals_effect.base）
 - PT加成 pt_bonus：来自 ramen_region_effect（超级拉面期间来自 finals_effect.extra）
-- 上层数值上限加成：来自ramen_basic_effect （对属性和PT都生效），finals_effect（仅对pt生效）
+- 上层数值上限加成（**属性与 PT 各自结算；普通回合两者同值，超级拉面两者来源不同**）：
+  - 属性上段上限 = `100 + status_limit`：普通回合来自 `ramen_basic_effect.status_limit`（Y2 +20 / Y3 +40），超级拉面来自选项（training_limit_options）的「獲得上限+100」
+  - PT 上段上限 = `100 + pt_limit`：普通回合来自 `ramen_basic_effect.status_limit`（「獲得上限アップ」对属性/PT 同值生效），超级拉面来自 `finals_effect.extra` 的「SP獲得上限+100」
+  - 超级拉面期间：属性上限走选项、PT 上限走 extra，两者各 +100，互不叠加
 - 属性训练上层数值 training_value_ramen = lower_value * (100 + xunlian)/100.0 * (100+youqing)/100.0
 - PT训练上层数值 training_value_ramen = lower_value * (100+xunlian)/100.0 * (100+youqing)/100.0 * (100+pt_bonus)/100.0
 - Hint出现率：在分配人物时计算，不参与训练数值计算。基础值为 7.5%,随剧本Buff增加，例如+30就是 7.5* (1+30%)=9.75%
@@ -380,7 +391,7 @@ ramen_memo里记录的典型的分配结果为：（左-总消耗，右-分配�
 - deyilv: 得意率（本剧本三年均为 0；得意率加成来自 `ramen_pt_effect` 和 RMJ 结算效果，参见"训练分布的得意率计算"小节）
 - fail_rate_drop: 失败率下降
 - jiban: 羁绊增加
-- status_limit: 属性和PT上限增加
+- status_limit: 上段数值上限增加（「獲得上限アップ」，属性与 PT 同值生效：Y2 +20 / Y3 +40；超级拉面选项则是属性专属 +100）
 - hint_special: 仅第三年生效的特殊hint效果
 
 ### RMJ成功效果 (ramen_success_effect)
@@ -438,13 +449,15 @@ ramen_memo里记录的典型的分配结果为：（左-总消耗，右-分配�
 
 [0, 3, 5, 7, 9, 10]
 
-**档位计算**：每获得300点剧本PT，提升一档。档位对应关系：
-- 0-299 PT：0档（加成0）
-- 300-599 PT：1档（加成3）
-- 600-899 PT：2档（加成5）
-- 900-1199 PT：3档（加成7）
-- 1200-1499 PT：4档（加成9）
-- 1500+ PT：5档（加成10）
+**档位计算**：每获得 **1000** 点剧本PT，提升一档（`region_bonus[pt/1000]`，上限 5 档）。档位对应关系：
+- 0-999 PT：0档（加成0）
+- 1000-1999 PT：1档（加成3）
+- 2000-2999 PT：2档（加成5）
+- 3000-3999 PT：3档（加成7）
+- 4000-4999 PT：4档（加成9）
+- 5000+ PT：5档（加成10）
+
+> 口径校准见上节 `ramen_region_effect` 下方注释（旧述「每300点一档」有误，实测按 1000 点一档）。
 
 ### 训练基础值 (training_basic_value)
 
@@ -587,5 +600,5 @@ fn select_event_choice<G: Game>(
 
 `run_begin` 阶段对 `is_super_ramen_turn()` 的处理：
 - 每个 URA 回合（turn=72-77）Begin 阶段：`self.uma.add_value(&ActionValue { vital: finals.base.vital, motivation: finals.base.motivation })`，即体力+20、干劲+1
-- 仅 turn=72 时：`self.uma.race_bonus += finals.base.saihou`（一次性+100）。turn=73-77 不再重复累加，避免 race_bonus 持续增长
-- 实现位置：`crates/umasim/src/game/ramen/game.rs` 的 `run_begin` 函数末尾
+- 仅一次性：调用 `self.apply_super_ramen_saihou()`（幂等，`turn>=72` 且已选超级拉面时 `uma.race_bonus += finals.base.saihou`，合计只加一次，避免持续增长）；协议重放路径另在 `into_game` 补调同一方法
+- 实现位置：`crates/umasim/src/game/ramen/game.rs` 的 `apply_super_ramen_saihou` / `run_begin`；重放补调见 `crates/umaai/src/protocol/ramen.rs` 的 `into_game`

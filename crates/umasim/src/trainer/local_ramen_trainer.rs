@@ -2297,6 +2297,23 @@ impl RecommendedRamenTrainer {
             2
         }
     }
+
+    /// 复用同年手写地区策略的候选打分（供 MCTS 地区候选预过滤使用同一先验）。
+    ///
+    /// 返回 `(手写 argmax 下标, 与 `actions` 严格同长同序的打分)`；`.score` 即
+    /// `RamenPolicy::decide_region` 的地区分（第 3 年含 `region_y3_single_focus`
+    /// 否决：不合格候选记 0）。调用点与手写路径一致：turn 2/23/47 → 年 idx 0/1/2。
+    pub fn region_prior(
+        &self, game: &RamenGame, actions: &[RamenAction]
+    ) -> Result<(usize, Vec<RamenPolicyOutput>)> {
+        let year_idx = match game.turn() {
+            2 => 0,
+            23 => 1,
+            47 => 2,
+            _ => Self::year(game)
+        };
+        self.years[year_idx].policy.decide_region(game, year_idx, actions)
+    }
 }
 
 impl Default for RecommendedRamenTrainer {

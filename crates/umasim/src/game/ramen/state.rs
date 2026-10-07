@@ -221,6 +221,13 @@ pub struct RamenGame {
     pub current_effect: RamenEffect,
     /// 是否能触发分身
     pub deck_can_split: bool,
+    /// 超级拉面一次性赛后加成（`finals_effect.base.saihou`）是否已应用（幂等标记）
+    ///
+    /// 该加成累加到 `base.uma.race_bonus`，**不进** `RamenState`、不参与协议序列化：
+    /// 协议帧不含 `raceBonus`，重放时由 `GameStatusRamen::into_game` 在 turn>=72 帧上
+    /// 补调 [`Self::apply_super_ramen_saihou`]。此标记保证「模拟路径（`run_begin`）」与
+    /// 「重放路径（`into_game`）」合计只生效一次，不重复加。
+    pub super_ramen_saihou_applied: bool,
     /// 规则层事件 RNG（可选）
     ///
     /// `Game::next()` 中的吃面效果落地（分身分配）与 RMJ 事件使用此 RNG；
@@ -348,6 +355,7 @@ impl RamenGame {
             ramen: RamenState::default(),
             current_effect: RamenEffect::default(),
             deck_can_split: false,
+            super_ramen_saihou_applied: false,
             internal_rng: None,
             rule_master: None,
             turn_fixed: None,
@@ -402,6 +410,7 @@ impl RamenGame {
             ramen: RamenState::default(),
             current_effect: RamenEffect::default(),
             deck_can_split,
+            super_ramen_saihou_applied: false,
             internal_rng: None,
             rule_master: None,
             turn_fixed: None,

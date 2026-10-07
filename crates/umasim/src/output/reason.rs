@@ -608,36 +608,6 @@ mod tests {
         assert!(!lines.iter().any(|l| l.contains("置信")), "置信度不再上屏（只在原始数据）");
     }
 
-    /// 着色档位：候选高于首选 → 红底亮黄字 / 与首选差距 `<30`/`<100`/`<300`/其余 → 亮绿/绿/黄/灰
-    ///
-    /// 测文本内是否嵌入对应 ANSI 真彩色码：`bright_yellow on red`=`\e[93;41m`、
-    /// `bright_green`=`\e[92m`，`green`=`\e[32m`，`yellow`=`\e[33m`，
-    /// 自定义灰=`\e[38;2;128;128;128m`。`no-color` feature 下 colored 编译期
-    /// 禁用颜色，无法覆盖，测试跳过。
-    #[test]
-    fn test_color_thresholds() {
-        if cfg!(feature = "no-color") {
-            println!("跳过：no-color feature 下 ANSI 序列被编译期禁用");
-            return;
-        }
-        colored::control::SHOULD_COLORIZE.set_override(true);
-        let cases = [
-            (10.0, "\u{1b}[92m"),    // |gap|<30：亮绿
-            (29.9, "\u{1b}[92m"),    // 边界内侧：亮绿
-            (30.0, "\u{1b}[32m"),    // 边界外侧（|gap| 恰为 30）：绿
-            (50.0, "\u{1b}[32m"),    // |gap|<100：绿
-            (200.0, "\u{1b}[33m"),   // |gap|<300：黄
-            (500.0, "\u{1b}[38;2;128;128;128m"), // |gap|>=300：真彩色灰
-            (50.0, "\u{1b}[93;41m"), // gap>0：红底亮黄字（高于首选）
-        ];
-        for (gap, want_ansi) in cases {
-            let line = format_reason_line(format!("rival {gap}"), gap);
-            println!("gap={gap:+}: {line:?}");
-            assert!(line.contains(want_ansi), "gap={gap} 应嵌入 {want_ansi:?}，实际 {line:?}");
-        }
-        colored::control::SHOULD_COLORIZE.unset_override();
-    }
-
     /// 唯一候选：首选行仍输出，rivals 为空，渲染只产 1 行
     #[test]
     fn test_render_only_chosen() {

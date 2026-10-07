@@ -112,8 +112,10 @@ search_group_size = 512
 # 激进度上限（越大越重视胡局；0=平均，>4=只考虑最好局面）
 radical_factor_max = 1.4
 
-# UCB 期望标准差（探索项缩放量级）
-expected_search_stdev = 15000.0
+# UCB 期望标准差（探索项缩放量级）：按实测 region 单条 rollout 分数 σ≈2.4k 标定。
+# 原 15000 约为实测 σ 的 6×，探索项过强、浪费 rollout；
+# A/B（6 世界配对，search_n=8192）得分 Δ=+283±502（不显著），单局耗时 143.3s→69.5s。
+expected_search_stdev = 2500.0
 
 # 最大搜索深度（0=搜到游戏结束；>0=截断后用 leaf eval 估值）
 max_depth = 0
@@ -124,6 +126,11 @@ policy_delta = 100.0
 # 拉面杯搜哪些阶段（逗号分隔：train / ramen / special / region / event / super）
 # 实测补上 ramen 后 42 局配对 +2306 分；同算力加到 train 的 search_n 上只值 +39 分
 ramen_search_stages = "train,ramen,region"
+
+# 拉面地区选择（RegionSelect）候选预过滤 top-K：0 = 不剪枝（生产默认）
+# K>0 时按手写地区先验降序取前 K 个进入搜索，并强制并入手写 argmax（结果不劣于纯手写该点）；
+# 第 3 年地区候选 C(10,3)=120 个是本局最大候选集，是本项的主要作用点。
+# ramen_region_prune_topk = 30
 
 # UCB 搜索分配
 use_ucb = true

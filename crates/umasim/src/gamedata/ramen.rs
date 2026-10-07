@@ -24,7 +24,7 @@ pub struct RamenBasicEffect {
     pub fail_rate_drop: i32,
     /// 羁绊增加
     pub friendship: i32,
-    /// 属性和PT上限增加
+    /// 上段数值上限增加（「獲得上限アップ」：属性与 PT 同值生效）
     pub status_limit: i32,
     /// 仅第三年生效的特殊hint效果
     pub hint_special: bool

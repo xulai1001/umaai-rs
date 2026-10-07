@@ -854,6 +854,50 @@ impl RamenMctsTrainer {
             // combined.len() <= 1：不走合并，落回原逻辑
         }
 
+        // 地区候选预过滤（可选，默认关）：第 3 年 `C(10,3)=120` 个候选是本局最大集合，
+        // 仅初组 bootstrap 就有 `120 × search_group_size` 条 rollout。先用手写地区先验
+        // （与 rollout 基策同源）排序取 top-K，再对子集跑常规 MCTS。
+        // `ramen_region_prune_topk == 0` 时不进入本分支，生产行为逐位不变。
+        let region_topk = self.search.config().ramen_region_prune_topk;
+        if region_topk > 0 && game.stage == RamenStage::RegionSelect && actions.len() > region_topk {
+            let (hand_idx, prior) = self.fallback.region_prior(game, actions)?;
+            let mut keep: Vec<usize> = (0..actions.len()).collect();
+            keep.sort_by(|&a, &b| prior[b].score.total_cmp(&prior[a].score));
+            keep.truncate(region_topk);
+            // 强制并入手写 argmax：保证剪枝结果不劣于「本点走纯手写」
+            if !keep.contains(&hand_idx) {
+                keep[region_topk - 1] = hand_idx;
+            }
+            // 子集按原始下标升序，便于与全量候选逐位对照
+            keep.sort_unstable();
+            let subset: Vec<<RamenGame as Game>::Action> =
+                keep.iter().map(|&i| actions[i].clone()).collect();
+            self.searched.fetch_add(1, Ordering::Relaxed);
+            let output = self.search.search(game, &subset, rng)?;
+            let idx = match self.selection {
+                RamenSelection::Score => output.best_action_idx,
+                RamenSelection::Pt => output.best_action_pt_idx()
+            };
+            self.stash_search_breakdown(&output);
+            self.log_terminal_breakdown(game.turn() as i32, idx, &output);
+            self.emit_decision_reason(game.turn() as i32, idx, &output);
+            if self.verbose {
+                let (res, _) = &output.action_results[idx];
+                info!(
+                    "[MCTS][回合 {}] 阶段 {:?} 地区预过滤 {}->{} -> #{idx} {} (mean={:.0} n={})",
+                    game.turn(),
+                    game.stage,
+                    actions.len(),
+                    subset.len(),
+                    subset[idx],
+                    res.mean(),
+                    res.count()
+                );
+            }
+            self.stash_last_summary(&output, idx);
+            return Ok(keep[idx]);
+        }
+
         self.searched.fetch_add(1, Ordering::Relaxed);
         let output = self.search.search(game, actions, rng)?;
         let idx = match self.selection {
@@ -1126,6 +1170,54 @@ mod tests {
         c.finish()
     }
 
+    /// 地区候选预过滤：`ramen_region_prune_topk=K` 时只搜手写先验 top-K（并强制并入手写 argmax），
+    /// 返回值必落在该集合内；`K=0` 时行为由 [`Self::test_stages_none_matches_recommended`] 等既有对拍覆盖。
+    #[test]
+    fn test_region_prune_topk_returns_kept_candidate() -> Result<()> {
+        let mut c = Checks::new();
+        let (mut game, mut rng) = setup(42)?;
+        let hw = RecommendedRamenTrainer::new();
+        game.run_stage(&hw, &mut rng)?;
+        let mut reached = false;
+        while game.next() {
+            if game.stage == RamenStage::RegionSelect && game.turn() == 2 {
+                reached = true;
+                break;
+            }
+            game.run_stage(&hw, &mut rng)?;
+        }
+        c.check(reached, "真实推进到 turn 2 RegionSelect");
+
+        let actions = game.list_actions()?;
+        c.check(actions.len() > 3, "第 1 年候选数 > K，剪枝确实发生");
+
+        // 与实现同口径重建期望保留集合：按手写地区先验降序取 top-3，并强制并入 argmax
+        let (hand_idx, prior) = hw.region_prior(&game, &actions)?;
+        let mut expect: Vec<usize> = (0..actions.len()).collect();
+        expect.sort_by(|&a, &b| prior[b].score.total_cmp(&prior[a].score));
+        expect.truncate(3);
+        if !expect.contains(&hand_idx) {
+            expect[2] = hand_idx;
+        }
+
+        let gate = RamenSearchStages {
+            region_select: true,
+            ..RamenSearchStages::none()
+        };
+        let trainer = RamenMctsTrainer::new(
+            SearchConfig::default()
+                .with_search_n(2)
+                .with_ucb(false)
+                .with_ramen_region_prune_topk(3)
+        )
+        .with_stages(gate);
+        let idx = trainer.select_action(&game, &actions, &mut rng)?;
+        println!("地区剪枝 K=3: 返回 idx={idx}，保留集合={expect:?}");
+        c.check(trainer.searched_count() == 1, "地区剪枝分支走过搜索");
+        c.check(expect.contains(&idx), "返回值落在预过滤保留集合内");
+        c.finish()
+    }
+
     /// 门控全关时必须与正式推荐策略 [`RecommendedRamenTrainer`] **逐位一致**
     ///
     /// 这是实验的对照组正确性前提：若两者不一致，说明 MCTS 壳自己额外消耗了
@@ -1357,12 +1449,18 @@ mod tests {
         // 2026-09-21 重抓：友人出行跨年配额定档 [0,3,5]（原 [0,2,5]），整局路径变化。
         // 2026-10-04 重抓：超级拉面效果修正（只保留 RMJ + finals、接入选中选项的
         // +100 训练上限），URA 训练数值变化，整局路径与终局数值变化。
-        c.check(score == 61332, "评分与改动前逐位相同");
+        // 2026-10-06 重抓：PT 上段上限口径修正——普通回合 `ramen_basic_effect.status_limit`
+        // 同时抬属性与 PT 上限（Y2 +20 / Y3 +40），吃面回合 PT 上限下降，整局路径与终局数值变化。
+        // 2026-10-06 重抓：五维评分表换用 URA `StatusToPoint`（raw 表 3802 项），
+        // 手写策略的 marginal gain 随之下调，决策路径与终局数值整体变化。
+        // 2026-10-07 重抓：拉面 PT 口径改为 M2——PT 友情**不**剔除 RMJ（友情对属性与 PT 同时生效），
+        // 且吃面回合的效果档位按**吃面前** PT 取。整局路径与终局数值变化。
+        c.check(score == 61472, "评分与改动前逐位相同");
         c.check(
-            game.uma.five_status == [3337, 1859, 2126, 948, 1197],
+            game.uma.five_status == [3337, 1793, 2196, 936, 1213],
             "五维与改动前逐位相同"
         );
-        c.check(game.uma.skill_pt == 8189, "技能点与改动前逐位相同");
+        c.check(game.uma.skill_pt == 8002, "技能点与改动前逐位相同");
         c.check(game.ramen.scenario_pt == 0, "剧本 PT 与改动前逐位相同");
         c.check(searched == 61, "searched_count 与改动前逐位相同");
         c.finish()
@@ -1518,7 +1616,13 @@ mod tests {
         // （重搜仍为 0，语义上界断言不变）。
         // 2026-10-04 重抓：超级拉面效果修正（RMJ + finals、选中选项 +100 上限），
         // 整局搜索路径变化，SpecialSelect 调用 29、重搜 0。
-        c.check(special_calls == 29, "SpecialSelect 调用数与改动前逐位相同");
+        // 2026-10-06 重抓：PT 上段上限口径修正（普通回合 basic.status_limit 同时抬 PT 上限），
+        // 吃面回合 PT 上限下降 → 决策倾向变化，SpecialSelect 调用 29→26、重搜 0→2。
+        // 2026-10-06 重抓：五维评分表换用 URA `StatusToPoint`，决策倾向再变，
+        // SpecialSelect 调用 26→27、重搜 2→1。
+        // 2026-10-07 重抓：拉面 PT 口径改为 M2（PT 友情不剔 RMJ + 吃面按吃面前 PT），
+        // 决策倾向再变，SpecialSelect 调用 27→30、重搜 1→0。
+        c.check(special_calls == 30, "SpecialSelect 调用数与改动前逐位相同");
         c.check(special_searches == 0, "SpecialSelect 重搜数与改动前逐位相同");
         // 再留一条与具体数字解耦的语义上界，防止将来重抓快照时把比例抬上去
         c.check(

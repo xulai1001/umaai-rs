@@ -89,6 +89,8 @@ struct BenchArgs {
     search_ucb: Option<bool>,
     /// 覆盖 MCTS 激进度上限（None = game_config 实际值）
     radical_factor_max: Option<f64>,
+    /// 覆盖拉面地区候选预过滤 top-K（None = game_config 实际值；0 = 不剪枝）
+    region_prune_topk: Option<usize>,
     /// 配对 CSV 输出路径（相对 workspace 根）
     out: String
 }
@@ -104,6 +106,7 @@ impl Default for BenchArgs {
             search_stages: None,
             search_ucb: None,
             radical_factor_max: None,
+            region_prune_topk: None,
             out: "logs/ramen_mcts_pair_bench.csv".to_string()
         }
     }
@@ -140,13 +143,17 @@ fn apply_cli(mut args: BenchArgs) -> Result<BenchArgs> {
             Arg::Long("radical-factor") => {
                 args.radical_factor_max = Some(bench::parse_value(&mut parser, "radical-factor")?)
             }
+            Arg::Long("region-prune-topk") => {
+                args.region_prune_topk = Some(bench::parse_value(&mut parser, "region-prune-topk")?)
+            }
             Arg::Long("out") => args.out = bench::parse_value(&mut parser, "out")?,
             Arg::Long("help") | Arg::Short('h') => {
                 println!(
                     "用法: ramen_mcts_pair_bench [--runs N] [--seeds S1,S2,...] [--builds b1,b2,...]
 \n      MCTS 参数默认=生产实际值（game_config [mcts] + ramen_search_stages）；
 \n      覆盖实验: [--search-n N] [--search-stages train,ramen,...] [--search-ucb true|false]
-\n                [--radical-factor F] [--out PATH]
+\n                [--radical-factor F] [--region-prune-topk K] [--out PATH]
+\n      地区剪枝: [--region-prune-topk K]（K>0 时按手写地区先验取 top-K 再搜；0 = 不剪枝）
 \n  同 (build, seed, 局号) 下用 MCTS 训练员与正式推荐手写策略各跑整局，
 \n  配对差 Δ = 评分_mcts − 评分_handwritten，逐局落 CSV 并汇总（均值/SE/95%CI）。"
                 );
@@ -414,6 +421,9 @@ fn main() -> Result<()> {
     if let Some(rf) = args.radical_factor_max {
         search = search.with_radical_factor_max(rf);
     }
+    if let Some(k) = args.region_prune_topk {
+        search = search.with_ramen_region_prune_topk(k);
+    }
     let stages = match &args.search_stages {
         Some(spec) => RamenSearchStages::parse(spec)?,
         None => RamenSearchStages::parse(&game_config.mcts.ramen_search_stages)?
@@ -449,14 +459,15 @@ fn main() -> Result<()> {
         args.runs
     );
     println!(
-        "  MCTS 生效参数（默认=生产实际值）: search_n={} stages={} ucb={} radical={} group_size={} cpuct={} expected_stdev={}",
+        "  MCTS 生效参数（默认=生产实际值）: search_n={} stages={} ucb={} radical={} group_size={} cpuct={} expected_stdev={} region_prune_topk={}",
         search.search_n,
         args.search_stages.as_deref().unwrap_or(&game_config.mcts.ramen_search_stages),
         search.use_ucb,
         search.radical_factor_max,
         search.search_group_size,
         search.search_cpuct,
-        search.expected_search_stdev
+        search.expected_search_stdev,
+        search.ramen_region_prune_topk
     );
 
     // 并行跑全部 (build, seed, run) 配对局；任一对失败即整体报错（CSV 不落半截）

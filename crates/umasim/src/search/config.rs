@@ -85,7 +85,15 @@ pub struct SearchConfig {
     /// 全部候选按评分降序只取前 N 个进入显示与分析，其余**直接排除**：
     /// 不显示内容、不做原因分析。中选者一般也在前 N 内；若不在，渲染时
     /// 仍按"首选"在第 1 行单独显示。
-    pub reason_max_display: usize
+    pub reason_max_display: usize,
+
+    /// 拉面地区选择（`RegionSelect`）候选预过滤 top-K
+    ///
+    /// 仅对拉面 `RegionSelect` 生效：按手写地区先验（与 rollout 基策同源）
+    /// 降序排序，只把前 K 个候选交给 MCTS。`0`（默认）= 不剪枝，
+    /// 生产行为逐位不变。来源：`game_config.toml` 的
+    /// `[mcts] ramen_region_prune_topk`。
+    pub ramen_region_prune_topk: usize
 }
 
 impl Default for SearchConfig {
@@ -103,7 +111,8 @@ impl Default for SearchConfig {
             crn_stage_reseed: true,
             record_ordered_rollouts: false,
             reason_gap_threshold: 150.0,
-            reason_max_display: 5
+            reason_max_display: 5,
+            ramen_region_prune_topk: 0
         }
     }
 }
@@ -193,6 +202,12 @@ impl SearchConfig {
         self
     }
 
+    /// 设置拉面地区候选预过滤 top-K（`0` = 不剪枝）
+    pub fn with_ramen_region_prune_topk(mut self, topk: usize) -> Self {
+        self.ramen_region_prune_topk = topk;
+        self
+    }
+
     pub fn new_game_config(game_config: &GameConfig) -> Self {
         let search_config = SearchConfig::default()
             .with_search_n(game_config.mcts.search_n)
@@ -206,7 +221,8 @@ impl SearchConfig {
             .with_expected_search_stdev(game_config.mcts.expected_search_stdev)
             .with_crn_stage_reseed(game_config.mcts.crn_stage_reseed)
             .with_reason_gap_threshold(game_config.mcts.reason_gap_threshold)
-            .with_reason_max_display(game_config.mcts.reason_max_display);
+            .with_reason_max_display(game_config.mcts.reason_max_display)
+            .with_ramen_region_prune_topk(game_config.mcts.ramen_region_prune_topk);
         search_config
     }
 }

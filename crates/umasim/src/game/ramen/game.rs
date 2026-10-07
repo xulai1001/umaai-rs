@@ -690,8 +690,9 @@ impl Game for RamenGame {
         let xunlian_mult = (100 + ramen_effect.xunlian) as f64 / 100.0;
         let youqing_mult = (100 + ramen_effect.youqing) as f64 / 100.0;
         let pt_bonus_mult = (100 + ramen_effect.pt_bonus) as f64 / 100.0;
+        // 上限口径独立：属性吃 status_limit，PT 只吃 pt_limit（「SP獲得上限+100」）
         let status_limit = 100 + ramen_effect.status_limit;
-        let pt_limit = 100 + ramen_effect.status_limit + ramen_effect.pt_limit;
+        let pt_limit = 100 + ramen_effect.pt_limit;
         // 3. 上层值：拉面 buff 带来的增量
         // - xunlian × youqing 对 status_pt[0..4]（5 个属性训练值，含副属性加成 buff.bonus）都生效
         // - pt_bonus 仅对 status_pt[5]（PT）单独生效
@@ -703,7 +704,7 @@ impl Game for RamenGame {
                 base_value.status_pt[i] += upper;
             }
         }
-        // PT 部分额外乘 pt_bonus
+        // PT 部分额外乘 pt_bonus（友情口径与属性一致）
         let pt_upper_raw = (base_value.status_pt[5] as f64 * xunlian_mult * youqing_mult * pt_bonus_mult) as i32
             - base_value.status_pt[5];
         let pt_upper = pt_upper_raw.min(pt_limit).max(0);
@@ -1206,6 +1207,34 @@ impl RamenGame {
         }
     }
 
+    /// 应用超级拉面的**一次性**赛后加成（`finals_effect.base.saihou` → `race_bonus`）。
+    ///
+    /// **幂等**：条件满足时合计最多生效一次（`super_ramen_saihou_applied` 置位后不再加），
+    /// 故「模拟路径（[`Self::run_begin`]）」与「重放路径（`into_game`）」同时调用也不会重复加。
+    ///
+    /// 生效条件：`turn >= 72`（已进入超级拉面段）且已选超级拉面档位（`ramen.super_ramen` 为 `Some`）。
+    /// 返回本次是否真正生效（供调用方决定日志）。
+    ///
+    /// 背景：协议帧不含 `raceBonus`，重放时 `parse_basegame` 只从支援卡累计，
+    /// 缺了这 +100 会让 URA 段（turn 73/75/77 三次比赛）收益被系统性低估（×1.55 而非 ×2.55）。
+    pub fn apply_super_ramen_saihou(&mut self) -> bool {
+        if self.super_ramen_saihou_applied {
+            return false;
+        }
+        if self.base.turn < 72 || self.ramen.super_ramen.is_none() {
+            return false;
+        }
+        let saihou = global!(RAMENDATA).finals_effect.base.saihou;
+        self.uma.race_bonus += saihou;
+        self.super_ramen_saihou_applied = true;
+        diag!(
+            "超级拉面赛后加成（一次性）: race_bonus +{} → {}",
+            saihou,
+            self.uma.race_bonus
+        );
+        true
+    }
+
     /// Begin 阶段：动态人头管理、隐藏风味、事件处理
     ///
     /// turn 2 只跑前半段，地区选择交给独立的 `RegionSelect` 阶段；
@@ -1324,8 +1353,7 @@ impl RamenGame {
                 }
             }
             // 应用 finals_effect.base 的 vital/motivation 恢复效果（每回合）
-            // + saihou（赛后加成）一次性应用：仅在进入超级拉面第一回合（turn=72）+saihou，
-            // 之后回合保留已生效值，不重复累加
+            // + saihou（赛后加成）一次性应用（幂等，见 `apply_super_ramen_saihou`）
             let ramen_data = global!(RAMENDATA);
             let finals_base = &ramen_data.finals_effect.base;
             let value = ActionValue {
@@ -1334,22 +1362,13 @@ impl RamenGame {
                 ..Default::default()
             };
             self.uma.add_value(&value);
-            if self.base.turn == 72 {
-                // 进入超级拉面第一回合时一次性加 saihou（之后回合不再累加）
-                self.uma.race_bonus += finals_base.saihou;
-                diag!(
-                    "超级拉面自动恢复: 体力+{}, 干劲+{}, 赛后+{}（一次性）",
-                    finals_base.vital,
-                    finals_base.motivation,
-                    finals_base.saihou
-                );
-            } else {
-                diag!(
-                    "超级拉面自动恢复: 体力+{}, 干劲+{}",
-                    finals_base.vital,
-                    finals_base.motivation
-                );
-            }
+            // 一次性赛后加成（race_bonus +saihou）：条件满足时合计只生效一次
+            self.apply_super_ramen_saihou();
+            diag!(
+                "超级拉面自动恢复: 体力+{}, 干劲+{}",
+                finals_base.vital,
+                finals_base.motivation
+            );
         }
 
         Ok(())
@@ -3888,6 +3907,47 @@ struct AlwaysTrueRng;
 
         println!("saihou 一次性 +100（不跨回合累积）验证通过");
 
+        Ok(())
+    }
+
+    /// `apply_super_ramen_saihou` 幂等：条件满足时合计只 +saihou 一次
+    ///
+    /// 覆盖「模拟 run_begin」与「协议重放 into_game」两条路径合计不重复加：
+    /// - turn<72 或未选超级拉面（None）→ 不生效；
+    /// - turn>=72 且已选超级拉面 → 首次 +100，二次调用不再加。
+    #[test]
+    fn test_apply_super_ramen_saihou_idempotent() -> Result<()> {
+        let workspace_root = get_workspace_root()?;
+        std::env::set_current_dir(workspace_root)?;
+        let _ = init_test_logger("info");
+        let _ = init_global();
+
+        let mut game = RamenGame::newgame(TEST_UMA_ID, &TEST_DECK, TEST_INHERIT)?;
+        game.add_friend_and_npcs()?;
+        game.ramen.super_ramen = Some(1);
+
+        // turn<72：不生效
+        game.base.turn = 71;
+        let base_bonus = game.uma.race_bonus;
+        assert!(!game.apply_super_ramen_saihou(), "turn<72 不应生效");
+        assert_eq!(game.uma.race_bonus, base_bonus, "turn<72 race_bonus 不应变");
+
+        // turn=72：首次生效 +100
+        game.base.turn = 72;
+        assert!(game.apply_super_ramen_saihou(), "turn>=72 且已选超级拉面应首次生效");
+        let after_first = game.uma.race_bonus;
+        assert_eq!(after_first - base_bonus, 100, "应一次性 +100");
+
+        // 二次调用（模拟重放已生效后 run_begin 仍被调）：不重复加
+        assert!(!game.apply_super_ramen_saihou(), "二次调用不应生效");
+        assert_eq!(game.uma.race_bonus, after_first, "race_bonus 不应再涨");
+
+        // 未选超级拉面（None）：不生效
+        let mut game2 = RamenGame::newgame(TEST_UMA_ID, &TEST_DECK, TEST_INHERIT)?;
+        game2.base.turn = 75;
+        assert!(!game2.apply_super_ramen_saihou(), "未选超级拉面不应生效");
+
+        println!("apply_super_ramen_saihou 幂等性验证通过");
         Ok(())
     }
 

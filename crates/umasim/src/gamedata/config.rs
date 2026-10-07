@@ -33,7 +33,12 @@ pub struct GameConstants {
     pub pt_score_rate: f32,
     /// 每级hint对应的pt
     pub hint_pt_rate: f32,
-    /// 每点属性对应的评分 ~2000(翻倍2800)
+    /// 每点属性对应的终局评分，**原始属性索引**（1200 以上未减半），长度 3802（raw 0..3801）
+    ///
+    /// 来源：UmamusumeResponseAnalyzer `Database.StatusToPoint`（**显示值**索引 0..2500）。
+    /// 经 `raw[r] = ura[cut(r)]`（`cut` 为显示空间截断，见 `explain::five_status_cutted`）
+    /// 展开回未减半索引写入。显示值 0..2000（raw 0..2800）两表逐位相等，
+    /// 差异仅在显示值 ≥2001（raw ≥2802）。
     pub five_status_final_score: Vec<i32>,
     /// 评价档次
     pub rank_scores: Vec<i32>,
@@ -85,7 +90,7 @@ impl GameConstants {
 
     /// 查五维属性对应的终局评分，越界饱和到表末
     ///
-    /// `five_status_final_score` 长度有限（当前 3399 档），而五维上限 =
+    /// `five_status_final_score` 长度有限（当前 3802 档），而五维上限 =
     /// 剧本基值 + 继承三次，蓝因子拉满时会超出表长。此前三处消费点行为各不相同：
     /// 裸下标会 panic，`unwrap_or(0)` 会静默把分数算成 0（进而让手写策略
     /// 误判该维收益为极大负值、永久回避它）。统一走本方法，越界一律饱和。
@@ -168,6 +173,16 @@ pub struct MctsConfig {
     /// 分（t=0.14），即 `train` 一侧已饱和。
     #[serde(default = "default_mcts_ramen_search_stages")]
     pub ramen_search_stages: String,
+    /// 拉面地区选择（`RegionSelect`）候选预过滤：只把**手写地区先验 top-K** 交给 MCTS。
+    ///
+    /// 第 3 年地区候选是 `C(10,3)=120` 个，是全局最大候选集，仅初组 bootstrap
+    /// 就有 `120 × search_group_size` 条 rollout。本项按手写 `decide_region`
+    /// 的地区分（与 rollout 基策同源）降序排序，只保留前 K 个进入搜索。
+    ///
+    /// `0`（默认）= 不剪枝，生产行为逐位不变。手写 argmax 一定落在保留集合内
+    /// （排序后强制并入），故剪枝结果不会劣于「纯手写该点」。
+    #[serde(default)]
+    pub ramen_region_prune_topk: usize,
 
     // ========== UCB 搜索分配参数 ==========
     /// 是否启用 UCB 搜索分配
@@ -183,8 +198,8 @@ pub struct MctsConfig {
     pub search_cpuct: f64,
     /// UCB 探索项的缩放标尺（量纲与 score 相同），不是实测统计量。
     ///
-    /// 生产 toml 取 15000 是有意调猛的探索强度；`SearchConfig::default()` 的 2200
-    /// 是 C++ UmaAi 默认值。二者服务不同场景，不需要对齐。
+    /// 生产 toml 取 2500，按实测 region 单条 rollout 分数 σ≈2.4k 标定；
+    /// `SearchConfig::default()` 的 2200 是 C++ UmaAi 默认值。二者服务不同场景，不需要对齐。
     #[serde(default = "default_mcts_expected_search_stdev")]
     pub expected_search_stdev: f64,
     /// 是否按 `(回合, 阶段)` 重新播种 rollout 随机流（外挂 CRN，仅 onsen 生效）
@@ -218,6 +233,7 @@ impl Default for MctsConfig {
             rollout_batch_size: default_mcts_rollout_batch_size(),
             policy_delta: default_mcts_policy_delta(),
             ramen_search_stages: default_mcts_ramen_search_stages(),
+            ramen_region_prune_topk: 0,
             use_ucb: default_mcts_use_ucb(),
             search_group_size: default_mcts_search_group_size(),
             search_cpuct: default_mcts_search_cpuct(),
@@ -970,6 +986,9 @@ pub struct OverrideMctsConfig {
     /// 拉面杯搜索阶段（可选覆盖）
     #[serde(default)]
     pub ramen_search_stages: Option<String>,
+    /// 拉面地区候选预过滤 top-K（可选覆盖；`0` = 不剪枝）
+    #[serde(default)]
+    pub ramen_region_prune_topk: Option<usize>,
     /// 是否启用 UCB 搜索分配（可选覆盖）
     #[serde(default)]
     pub use_ucb: Option<bool>,
@@ -1113,6 +1132,9 @@ impl OverrideGameConfig {
         if let Some(v) = m.ramen_search_stages {
             ret.mcts.ramen_search_stages = v;
         }
+        if let Some(v) = m.ramen_region_prune_topk {
+            ret.mcts.ramen_region_prune_topk = v;
+        }
         if let Some(v) = m.use_ucb {
             ret.mcts.use_ucb = v;
         }
@@ -1201,10 +1223,10 @@ mod tests {
         Ok(toml::from_str(&text)?)
     }
 
-    /// 打印 12 个 MCTS 字段，便于验收对照。
+    /// 打印 MCTS 字段，便于验收对照。
     fn dump_mcts(label: &str, m: &MctsConfig) {
         println!(
-            "{label}: search_n={} radical_factor_max={} max_depth={} rollout_evaluator={} rollout_batch_size={} policy_delta={} ramen_search_stages={} use_ucb={} search_group_size={} search_cpuct={} expected_search_stdev={} crn_stage_reseed={}",
+            "{label}: search_n={} radical_factor_max={} max_depth={} rollout_evaluator={} rollout_batch_size={} policy_delta={} ramen_search_stages={} ramen_region_prune_topk={} use_ucb={} search_group_size={} search_cpuct={} expected_search_stdev={} crn_stage_reseed={}",
             m.search_n,
             m.radical_factor_max,
             m.max_depth,
@@ -1212,6 +1234,7 @@ mod tests {
             m.rollout_batch_size,
             m.policy_delta,
             m.ramen_search_stages,
+            m.ramen_region_prune_topk,
             m.use_ucb,
             m.search_group_size,
             m.search_cpuct,
@@ -1400,8 +1423,8 @@ radical_factor_max = 1.4
         let mut c = Checks::new();
         c.check(merged.mcts.search_group_size == 512, "search_group_size == 512");
         c.check(
-            merged.mcts.expected_search_stdev == 15000.0,
-            "expected_search_stdev == 15000.0"
+            merged.mcts.expected_search_stdev == 2500.0,
+            "expected_search_stdev == 2500.0"
         );
         c.check(merged.mcts.rollout_batch_size == 64, "rollout_batch_size == 64");
         c.check(merged.mcts.search_n == 12288, "search_n == 12288");
@@ -1409,11 +1432,11 @@ radical_factor_max = 1.4
         c.finish()
     }
 
-    /// 整段省略 `[mcts]`：解析成功，12 个字段全部保留 default_config.toml。
+    /// 整段省略 `[mcts]`：解析成功，13 个字段全部保留 default_config.toml。
     ///
     /// 若 `OverrideMctsConfig` 某字段 Default 改成 `Some(缺省值)`，本测试必须红。
     #[test]
-    fn test_mcts_override_omitted_section_keeps_all_twelve() -> Result<()> {
+    fn test_mcts_override_omitted_section_keeps_all_thirteen() -> Result<()> {
         let base = load_real_default()?;
         let text = r#"
 [config_override]
@@ -1435,12 +1458,13 @@ year3 = [8, 9, 4, 2, 6]
                 && ov.mcts.rollout_batch_size.is_none()
                 && ov.mcts.policy_delta.is_none()
                 && ov.mcts.ramen_search_stages.is_none()
+                && ov.mcts.ramen_region_prune_topk.is_none()
                 && ov.mcts.use_ucb.is_none()
                 && ov.mcts.search_group_size.is_none()
                 && ov.mcts.search_cpuct.is_none()
                 && ov.mcts.expected_search_stdev.is_none()
                 && ov.mcts.crn_stage_reseed.is_none(),
-            "省略 [mcts] 时 12 个覆盖字段全为 None"
+            "省略 [mcts] 时 13 个覆盖字段全为 None"
         );
         let merged = ov.merge(&base);
         dump_mcts("省略 [mcts] merge 后", &merged.mcts);
@@ -1466,6 +1490,10 @@ year3 = [8, 9, 4, 2, 6]
         c.check(
             merged.mcts.ramen_search_stages == base.mcts.ramen_search_stages,
             "ramen_search_stages 保留 toml"
+        );
+        c.check(
+            merged.mcts.ramen_region_prune_topk == base.mcts.ramen_region_prune_topk,
+            "ramen_region_prune_topk 保留 toml"
         );
         c.check(merged.mcts.use_ucb == base.mcts.use_ucb, "use_ucb 保留 toml");
         c.check(
@@ -1529,6 +1557,7 @@ year3 = []
 search_group_size = 777
 crn_stage_reseed = false
 ramen_search_stages = "train,region"
+ramen_region_prune_topk = 30
 "#;
         let ov: OverrideGameConfig = toml::from_str(text)?;
         let merged = ov.merge(&base);
@@ -1539,6 +1568,10 @@ ramen_search_stages = "train,region"
         c.check(
             merged.mcts.ramen_search_stages == "train,region",
             "ramen_search_stages 覆盖为 train,region"
+        );
+        c.check(
+            merged.mcts.ramen_region_prune_topk == 30,
+            "ramen_region_prune_topk 覆盖为 30"
         );
         c.check(merged.mcts.search_n == base.mcts.search_n, "未写的 search_n 保留 toml");
         c.check(

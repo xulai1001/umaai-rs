@@ -2,6 +2,20 @@
 
 本文件用于记载较复杂问题（需要用户协助解决的）的解决过程。
 
+## URA 段（turn≥72）比赛收益系统性低估 —— 71→72 运气分大跳
+
+- **日期**：2026-10-07
+- **状态**：已解决
+- **问题描述**：日志 `logs/game6261` 在 turn 71→72 之间运气分出现约 −1013 的大跳（`turn_delta` ≈ −1083），远超 `mcts_turn_bonus`(70)/回合 的正常量级。用户初判为「turn72_2 训练本身差」或「中间事件多算/漏算」。
+- **排查过程**：
+  1. **排除训练质量**：turn72_2 所选动作高于自身基线、5 个候选全部同步下移 → 非训练问题；逐项实测五维 / RMJ / `scenario_pt` 等协议字段也均无法解释 ~1000 分落差。
+  2. **终局对拍**（自建工具 `ramen_turn_inspect --rollout`，复刻生产 rollout 循环 `fork_for_rollout → apply_root_action → while next(){run_stage} → on_simulation_end`，用 `RamenTerminalStats` 汇总 25 维终局）：从 71_2 出发 n=8 均值 **70103.88**；从 72_2 出发三者中最高的「智训练」**69197.00**，差 ~900（且证实 MCTS 在 72_2 选智训练是对的）。
+  3. **逐决策点轨迹对拍**（`--n 1 --trace`）：两侧 turn72 状态几乎相同、turn 73 起动作序列逐位一致，**唯一差异**是比赛加成 `A=155 / B=55`（差恰好 +100），对应 turn73 比赛收益 `+18×4 / +171pt` vs `+11×4 / +104pt`（比值 2.55:1.55）。
+  4. **根因**：`race_bonus` 只作用于**比赛**五维收益（`base/action.rs` 乘 `(100+race_bonus)/100`，不影响训练）；`umasim` 内部模拟在 turn 72 `run_begin` 执行 `uma.race_bonus += finals_effect.base.saihou`（+100）；而协议重放 `GameStatusRamen::into_game` 走 `parse_basegame`——`parse_uma` 把 `race_bonus` 清零、只累加支援卡 `saihou` → 55，且 `game6261_turn72_2.json` **不含 `raceBonus` 字段**，无从恢复。旁证：真机 URA 段比赛实测 `[+0,+30,+30,+30,+30]` 与 ×2.55 口径一致（非 ×1.55），说明真机加了这 +100、是重放漏了。
+- **解决方案**：新增 `RamenGame::apply_super_ramen_saihou()`——**幂等**（`turn>=72` 且 `ramen.super_ramen` 为 `Some` 时 +`finals_effect.base.saihou`），由新增的非序列化标记 `RamenGame::super_ramen_saihou_applied`（不进 `RamenState`）保证「模拟路径」与「重放路径」合计只生效一次；`run_begin` 的一次性加成改为调用该方法（不再写死 `turn==72`）；`into_game` 在 `super_ramen` 落位后补调一次。
+- **验证**：`test_replay_applies_super_ramen_race_bonus` 显示 game6261_turn72_2 的 `race_bonus` 由 55 → **155**（=卡片 55 + 超级拉面 100）；`test_apply_super_ramen_saihou_idempotent` 覆盖二次调用 / `turn<72` / 未选超级拉面；`luck_replay` 重放 game6261（search-n 512）turn 72 的 `turn_delta` 由 ≈ −1083 收敛到 **−388**（回归正常波动区间，同局其它回合亦有 ±600）；`umasim` lib **436** passed、`umaai` lib **66** passed；纯模拟路径数值不变（golden 基线未动）。
+- **备注**：诊断用的一次性改动（`luck_probe.rs` / `ramen_turn_inspect.rs`）已在验证后 `git checkout` 还原。
+
 ## 第 1 年地区选择的运气分 +1300 假跳升（链式推进漏加 NPC 人头）
 
 - **日期**：2026-10-03
@@ -763,7 +777,7 @@
   1. **末快照时刻定位**：73/75/77 三个比赛回合的快照都不含该回合胜场（`raceHistory` 到下一回合才补齐）→ 快照在比赛之前；game6243 的 158 份快照止于 `turn77_2`，无第 3 份、无 turn≥78 的帧（同时期 turn47 能有 `_6`，排除序号/写入问题）。
   2. **缺哪些事件**：从 `gamedata/scenario_ramen.json` 起出 `401407`（+40/+200）；`events.json` 的 `5011`（+5/+20）；剧本友人表 `830305105`（+15/+15/+15/+50）；末回合比赛按 `race_career`（+7/全维、+67pt）× 比赛加成。逐维复算与模拟探针逐位吻合（`luck_probe` 从 turn76_2 跑到终局：耐 2162+40+15+5+11=2233、根 1089+40+5+11=1145、智 2338+40+15+5+11=2409）。
   3. **模拟路线可行性**：从 turn76_2 起跑的整局模拟会走完结局事件（得分 65586），但从末快照 turn77_2 起跑**不会**——`into_game` 直接写 `stage=Train` 不走 Begin，turn 77 的 `add_mandatory_events`（5011/401407/友人结束）从未排队，实测 63230 vs 65586（差 2356）。该缺口只在「需要 T(77)/末回合运气读数」时才需修（比赛回合单候选不挂 luck，故 CSV 目前不显形）。
-  4. **评分表口径差异**：小黑板 `Database.StatusToPoint`（显示值索引、2501 段）与 umaai `five_status_final_score`（减半前索引、3399 段）在显示值 0..2000 逐位相等；2001 起 host 已按实测校准下调（−1 → −305），故两局报告五维分偏高 239 / 203——换表会整体位移 bench 基线，另开一拍。
+  4. **评分表口径差异**：小黑板 `Database.StatusToPoint`（显示值索引、2501 段）与 umaai `five_status_final_score`（减半前索引、3399 段）在显示值 0..2000 逐位相等；2001 起 host 已按实测校准下调（−1 → −305），故两局报告五维分偏高 239 / 203——换表会整体位移 bench 基线，另开一拍。**（2026-10-06 已落地：以 host 2501 项表为源、经 `raw[r] = ura[cut(r)]` 展开为 raw 表 3802 项，见该日 changelog；`Ramen_AI_0.2/` 与 `umaai-review-skill/data/` 副本本轮未同步）**
   5. **方案对比**（用户拍板）：插件端真机终局帧 ＞ 模拟推算。`/finish` 的 `trained_chara.rank_score` 被排除（属性/SP/Hint 已转成技能，超出 AI 评估轴）；`SkillTipsResponseAnalyzer` 提供了同一帧的现成判据（`state is 2 or 3 && unchecked 为空`）与端点注册样板（`check_event` / `load` 两条 wildcard，因玩家可能在终局画面退出重进）。
 - **解决方案**：
   1. **新信道**：插件在终局帧单独写 `finalScore.json`（固定名、扁平 payload、不带判别字段），**不写** `thisTurn.json`；umaai 监听改白名单 `{thisTurn.json, finalScore.json}`、队列元素带 basename，按文件名分流。
@@ -777,4 +791,4 @@
   3. 另两条为同一根因的重复报告；审查期间探针测试（`zz_probe_tests`）已由审查代理移除，仅在 `urafile.rs` 留下一处探针用例，已改写为正式用例（`producer_startup_fallback_pushes_residual_files`）并修正线程收尾。
   4. 两条被判为不成立（refuted）：`skillPtSpent` 负数导致 `total_pt` 溢出（当前取值恒非负）、`unwrap_or(-1)` 的牌位映射（非本次改动，既有代码）。
 - **验证**：`umaai` lib 62 测试 + `umaai_review` 49 测试全绿；新增用例覆盖终局帧解析（含必填字段与全 0 坏帧）、白名单入队与按文件去重、归局不符忽略、打包时机（终局帧/兜底）、重启重放不覆盖归档、评分来源优先级（末快照 62639 → 真机帧 64761，口径注记含来源）。
-- **备注**：待 Windows 实测确认三件事——终局帧实际端点（check_event/load）、`state` 取值、同局首份是否最完整（`skill_point` 是否单调不增）；另确认终局帧五维相对末快照是否为 +60（= 含友人结束）。未做：Hint 与已学技能分补齐（`skill_tips_array` / `skill_array` 数据已在同帧，成本极低）、五维分表换 host 校准版、`thisTurn.json` 的 `inheritGains` 移除。
+- **备注**：待 Windows 实测确认三件事——终局帧实际端点（check_event/load）、`state` 取值、同局首份是否最完整（`skill_point` 是否单调不增）；另确认终局帧五维相对末快照是否为 +60（= 含友人结束）。未做：Hint 与已学技能分补齐（`skill_tips_array` / `skill_array` 数据已在同帧，成本极低）、`thisTurn.json` 的 `inheritGains` 移除（五维分表换 host 校准版已于 2026-10-06 落地）。

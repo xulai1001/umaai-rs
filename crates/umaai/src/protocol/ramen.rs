@@ -167,6 +167,57 @@ fn map_selected_regions(raw: &[i32]) -> [usize; 3] {
     arr
 }
 
+/// 各年「第 n 次吃面后的累计剧本 PT」表（吃面后 → 吃面前 PT 回退用）
+///
+/// 当年增量 = `gain_pt_base[y] + gain_pt_delta[y] * min(n-1, 5)`（n = 当年第几次吃面）：
+/// 前 5 次逐次递增，第 6 次起封顶为固定值，故只需列出第 1..=6 次。
+/// `POST_EAT_PT_TABLE[y][n-1]` = 第 y 年第 n 次吃面后的累计 PT。
+/// 表值与 `RAMENDATA.gain_pt_base` / `gain_pt_delta` 对齐（同 `rules::calc_ramen_pt_gain`）。
+const POST_EAT_PT_TABLE: [[i32; 6]; 3] = [
+    [300, 630, 990, 1380, 1800, 2250], // Y1: base=300 delta=30，第 6 次起 +450
+    [400, 840, 1320, 1840, 2400, 3000], // Y2: base=400 delta=40，第 6 次起 +600
+    [500, 1050, 1650, 2300, 3000, 3750] // Y3: base=500 delta=50，第 6 次起 +750
+];
+
+/// 由「吃面后」协议 PT 回退到「吃面前」剧本 PT
+///
+/// 快照来自吃面之后：`ramen.scenario_pt` 已包含本次吃面的 PT 增量。但拉面的训练效果
+/// （`ramen_pt_effect` 档位 / `region_bonus` 档位）必须按**吃面前**的 `scenario_pt` 取
+/// （见 `ramen_memo_cn.md`「PT 增量延后到 NextTurn」条），故在此回退。
+///
+/// 剧本 PT 每年清零、各次吃面增量固定，故「吃面后 PT → 吃面前 PT」是确定的查表关系：
+/// 命中 [`POST_EAT_PT_TABLE`] 第 n 项即当年第 n 次吃面，增量 = 相邻两项之差；超出表尾
+/// （第 7 次起）增量恒为封顶值。
+///
+/// **不能**用 `next_scenario_pt - gain_pt_delta` 反推：当年吃面次数 ≥ 6 时增量已封顶
+/// （实测第 1 年 pt=2700 那帧本回合增量仍是 450，而 `450 - 30 = 420` 会算错）。
+///
+/// `year_idx` 越界（URA 回合）或协议 PT 落不到表上（数据异常 / 另有 PT 来源）时**不回退**，
+/// 直接返回协议值作防御。
+fn restore_pre_eat_pt(post_pt: i32, year_idx: usize) -> i32 {
+    if post_pt <= 0 {
+        return post_pt;
+    }
+    let Some(table) = POST_EAT_PT_TABLE.get(year_idx) else {
+        return post_pt;
+    };
+    let capped_step = table[5] - table[4];
+    if post_pt > table[5] {
+        // 第 7 次起：增量恒为封顶值
+        return if (post_pt - table[5]) % capped_step == 0 {
+            post_pt - capped_step
+        } else {
+            post_pt
+        };
+    }
+    // 前 6 次：命中累计值即当年第 n 次吃面，增量 = 相邻累计之差
+    match table.iter().position(|&total| total == post_pt) {
+        Some(n) if n > 0 => post_pt - (table[n] - table[n - 1]),
+        Some(_) => post_pt - table[0], // 第 1 次吃面
+        None => post_pt // 不在表内：数据异常
+    }
+}
+
 /// 协议 `active_effect_array` 的单项 `{category, id, value}`
 ///
 /// 仅在 `into_game` 内用其长度做 stage dispatch 判断，不落入 `RamenState`；
@@ -298,13 +349,28 @@ impl GameStatus for GameStatusRamen {
         } else {
             Some(ramen.super_ramen as usize)
         };
+        // 3.5 补超级拉面一次性赛后加成（race_bonus += finals_base.saihou）。
+        //     协议帧不含 `raceBonus`、`parse_basegame` 只从支援卡累计；且重放**不跑**
+        //     turn 72 的 `run_begin`（§5 dispatch 对 turn>=72 直接给 Train + combined_decision），
+        //     故必须在此补上——否则 URA 段比赛收益被系统性低估（×1.55 而非 ×2.55）。
+        //     `apply_super_ramen_saihou` 幂等：turn<72 或未选超级拉面时不生效，且合计最多一次。
+        game.apply_super_ramen_saihou();
         game.ramen.selected_regions = map_selected_regions(&ramen.selected_regions);
         game.ramen.current_ramen = if ramen.last_ramen < 0 || ramen.active_effect_array.is_empty() {
             None
         } else {
             Some(ramen.last_ramen as usize)
         };
-        game.ramen.scenario_pt = ramen.scenario_pt;
+        // 协议 `scenario_pt` 是**吃面后**的值。常规训练回合（turn 2..=71）的吃面帧回退到
+        // 吃面前 PT，使训练效果（`ramen_pt_effect` / `region_bonus` 档位）按吃面前算
+        // （详见 `restore_pre_eat_pt`）。未吃面帧 / URA 超级拉面回合直接透传。
+        game.ramen.scenario_pt =
+            if game.ramen.current_ramen.is_some() && (2..=71).contains(&base.turn) {
+                let year_idx = (game.current_year() - 1).max(0) as usize;
+                restore_pre_eat_pt(ramen.scenario_pt, year_idx)
+            } else {
+                ramen.scenario_pt
+            };
 
         // 4. personDistribution 适配（adapter_spec §personDistribution 适配）：
         //    spec 要求把全局按出现次序的 `8` 依次改写为 `8, 9, 10, 11, 12`。
@@ -672,8 +738,9 @@ mod tests {
             assert_eq!(game.ramen.train_level_bonus, 0, "第 1 年内不应有 RMJ 加成");
             assert!(game.ramen.rmj_results.is_empty(), "第 1 年内 rmj_results 应为空");
         }
-        // 新年窗口 scenario_pt：首回合未吃面（active_effect 空）→ 归零；已吃面 → 保留当年值
-        for (name, expect_pt) in [("game7075_turn24_2.json", 0), ("game7075_turn24_3.json", 400)] {
+        // 新年首回合 scenario_pt：未吃面（active_effect 空）→ 归零；已吃面 → 回退到吃面前
+        // （turn 24 即当年首面，回退后同为 0——见 `restore_pre_eat_pt`）
+        for (name, expect_pt) in [("game7075_turn24_2.json", 0), ("game7075_turn24_3.json", 0)] {
             if let Some(game) = load(name) {
                 println!("{name}: scenario_pt={} (期望 {expect_pt})", game.ramen.scenario_pt);
                 assert_eq!(game.ramen.scenario_pt, expect_pt, "{name} 新年窗口 scenario_pt 归一化不符");
@@ -720,6 +787,53 @@ mod tests {
         assert_eq!(if 2_i32 < 0 { None } else { Some(2_i32 as usize) }, Some(2));
     }
 
+    /// 重放路径：turn>=72 的超级拉面帧必须把 `finals_effect.base.saihou` 计入 `race_bonus`
+    ///
+    /// 回归背景：协议帧不含 `raceBonus`，`parse_basegame` 只从支援卡累计；且重放不跑
+    /// turn 72 的 `run_begin`。若不补这 +100，URA 段三次比赛收益被系统性低估
+    /// （×1.55 而非 ×2.55），表现为 71_2→72_2 的运气大跳。
+    #[test]
+    fn test_replay_applies_super_ramen_race_bonus() {
+        use std::fs;
+
+        use crate::protocol::{ParsedGame, parse_game_by_scenario};
+
+        let workspace_root = umasim::utils::get_workspace_root().expect("workspace root");
+        let path = workspace_root
+            .join("logs")
+            .join("game6261")
+            .join("game6261_turn72_2.json");
+        if !path.is_file() {
+            eprintln!("样本不存在：{}（跳过本测试）", path.display());
+            return;
+        }
+        let _ = std::env::set_current_dir(&workspace_root);
+        let _ = umasim::gamedata::init_global();
+
+        let contents = fs::read_to_string(&path).expect("read sample");
+        let ParsedGame::Ramen { game, .. } = parse_game_by_scenario(&contents).expect("parse sample")
+        else {
+            panic!("样本应为拉面剧本");
+        };
+
+        assert!(
+            game.ramen.super_ramen.is_some(),
+            "turn72_2 应为超级拉面已选（super_ramen 非 None）"
+        );
+        let card_saihou: i32 = game.base.deck.iter().map(|c| c.effect.saihou).sum();
+        let saihou = global!(RAMENDATA).finals_effect.base.saihou;
+        assert!(saihou > 0, "finals_effect.base.saihou 应为正值");
+        println!(
+            "turn72_2: card_saihou={card_saihou}, super saihou={saihou}, race_bonus={}",
+            game.uma.race_bonus
+        );
+        assert_eq!(
+            game.uma.race_bonus,
+            card_saihou + saihou,
+            "重放 turn>=72 帧的 race_bonus 应 = 支援卡 sai_hou 之和 + 超级拉面一次性加成"
+        );
+    }
+
     /// 151 份 turn import 样本驱动测试（实测 chara 6204 全 78 回合）
     ///
     /// 数据来源：`logs/GameStatusSend_Ramen/game6204_turn*.json`（151 份）
@@ -759,6 +873,7 @@ mod tests {
         let mut count_eaten_turns = 0usize; // last_ramen >= 0 + selected_regions 非零（年内吃面回合）
         let mut count_super_ramen_2 = 0usize; // super_ramen == 2（选了超级拉面档位 2）
         let mut max_scenario_pt: i32 = 0;
+        let mut max_scenario_pt_json: i32 = 0;
 
         for path in &files {
             let contents = fs::read_to_string(path).expect("read sample");
@@ -800,9 +915,7 @@ mod tests {
             };
 
             // 关键字段 round-trip 校验
-            // 1) scenario_pt 透传
-            assert_eq!(game.ramen.scenario_pt, scenario_pt_json, "{}: scenario_pt 不一致", path.display());
-            // 2) current_ramen 透传：仅在 last_ramen >= 0 且 active_effect_array 非空时生效
+            // 1) current_ramen 透传：仅在 last_ramen >= 0 且 active_effect_array 非空时生效
             //    （L311 改动：active_effect_array 为空时 current_ramen 置 None，即使 last_ramen 有效）
             let expected_current = if last_ramen_json < 0 || active_effect_empty {
                 None
@@ -810,6 +923,17 @@ mod tests {
                 Some(last_ramen_json as usize)
             };
             assert_eq!(game.ramen.current_ramen, expected_current, "{}: current_ramen 不一致", path.display());
+            // 2) scenario_pt：常规训练回合的吃面帧回退到吃面前 PT，其余透传
+            //    （新年窗口 turn 24/48/72 未吃面帧在 step 7 归零，同样落在透传分支）
+            let expect_pt = if expected_current.is_some() && (2..=71).contains(&game.base.turn) {
+                let year_idx = (game.current_year() - 1).max(0) as usize;
+                restore_pre_eat_pt(scenario_pt_json, year_idx)
+            } else if matches!(game.base.turn, 24 | 48 | 72) && active_effect_empty {
+                0
+            } else {
+                scenario_pt_json
+            };
+            assert_eq!(game.ramen.scenario_pt, expect_pt, "{}: scenario_pt 不一致", path.display());
             // 3) selected_regions 透传
             let expected_regions: [usize; 3] = [
                 selected_regions_json[0].max(0) as usize,
@@ -864,11 +988,12 @@ mod tests {
                 count_super_ramen_2 += 1;
             }
             max_scenario_pt = max_scenario_pt.max(game.ramen.scenario_pt);
+            max_scenario_pt_json = max_scenario_pt_json.max(scenario_pt_json);
         }
 
         println!("解析成功：{} / {}", count_ok, files.len());
         println!("stage 分布：{count_stage:?}");
-        println!("max_scenario_pt = {max_scenario_pt}");
+        println!("max_scenario_pt = {max_scenario_pt}（协议原始 max = {max_scenario_pt_json}）");
         println!("年内吃面回合数={count_eaten_turns}");
         println!("选了超级拉面档位 2 的样本数={count_super_ramen_2}");
         assert_eq!(count_ok, files.len(), "所有样本必须 parse + into_game 成功");
@@ -883,8 +1008,10 @@ mod tests {
         // 不应再出现旧协议派发的 stage
         assert!(!count_stage.contains_key("Settlement"), "Settlement stage 已废弃（46/48 不 dispatch）");
         assert!(!count_stage.contains_key("SuperRamenSelect"), "SuperRamenSelect stage 不应自动派发");
-        // 协议文档约束：chara 6204 max scenario_pt = 7500（Y3 终值）
-        assert_eq!(max_scenario_pt, 7500, "实测 chara 6204 应在 Y3 终值 7500");
+        // 协议文档约束：chara 6204 协议原始 max scenario_pt = 7500（Y3 终值）
+        assert_eq!(max_scenario_pt_json, 7500, "实测 chara 6204 协议原始 scenario_pt 应在 Y3 终值 7500");
+        // 吃面帧回退到吃面前 PT 后，game 侧 max 不会超过协议原始 max
+        assert!(max_scenario_pt <= max_scenario_pt_json, "回退后 scenario_pt 不应超过协议原始值");
         // 至少有一个 super_ramen == 2 的样本（实测 turn72 起）
         assert!(count_super_ramen_2 >= 1, "应至少有 1 份 super_ramen=2 样本");
         // 至少有一个 source=event / playing_state=46 / 48 等不 dispatch 样本（落到 Begin）

@@ -2,6 +2,18 @@
 
 本文件用于简要记录每次任务的修改内容。记录应尽量精简，每条修改一行，不包含代码细节。
 
+## 2026-10-07
+- **拉面 PT 上层口径修正（M2 最终版）**：吃面回合的训练效果一律按**吃面前 PT** 取——① `region_bonus` 档位由 `scenario_pt/300` 改为 `/1000`（上限 5 档；实测第 3 年 `active_effect_array` 反推 pt=500→0 / 1650→3 / 2300→5 / 3000→7）；② `region_bonus` 只计入友情、**不再计入 `pt_bonus`**；③ PT 上层友情**不剔除 RMJ**（用户拍板：友情加成正常情况下对属性与 PT 同时生效；曾试过剔除 `rmj_youqing`，已回退）。`umaai` 重放常规训练回合（turn 2..=71）吃面帧时新增 `restore_pre_eat_pt`，把协议 `scenario_pt`（吃面后值）按年打表反查回**吃面前**（规避当年吃面 ≥6 次时增量封顶导致的 `next-delta` 歧义），与引擎「PT 增量延后到 NextTurn」语义对齐。复算 turn48_3 PT=107、turn57_2 PT=134（实测 106/133，差 +1 属舍入误差）；4 个 golden 基线（bench / flat_search / ramen_mcts_trainer×2）重抓；memo 同步订正
+- **修复 URA 段比赛收益低估（turn 72 一次性赛后加成丢失）**：`race_bonus` 只作用于比赛五维收益，`umasim` 内部模拟在 turn 72 `run_begin` 会 `race_bonus += finals_effect.base.saihou`(+100)，但协议重放 `into_game` 走 `parse_basegame` 仅累加支援卡 `saihou`（帧不含 `raceBonus`）→ 线上 turn≥72 的比赛收益被系统性低估（×1.55 而非 ×2.55），表现为 game6261 的 71_2→72_2 运气大跳（`turn_delta` ≈−1083）。新增幂等方法 `RamenGame::apply_super_ramen_saihou()`（`super_ramen_saihou_applied` 非序列化标记保证 `run_begin` 与 `into_game` 两条路径合计只加一次），重放路径在 `super_ramen` 落位后补调。`luck_replay` 复测 turn 72 `turn_delta` 收敛到 −388，纯模拟数值不变
+- **新增拉面地区候选预过滤 `ramen_region_prune_topk`（默认 0 = 不剪枝）**：仅对 `RegionSelect` 生效，按手写地区先验（与 rollout 基策同源）降序只保留前 K 个候选进入 MCTS（手写 argmax 强制并入，结果不劣于纯手写该点）；第 3 年 `C(10,3)=120` 为全局最大候选集，是主要作用点。`MctsConfig` / `OverrideMctsConfig` / `SearchConfig` 三层接线，`ramen_mcts_pair_bench` 增 `--region-prune-topk` 开关
+- **UCB 探索标尺 `expected_search_stdev` 15000 → 2500**：按实测 region 单条 rollout 分数 σ≈2.4k 标定（原值约 6×σ，探索项过强、浪费 rollout）。A/B（6 世界配对，search_n=8192）得分 Δ=+283±502（不显著），单局耗时 143.3s → 69.5s；`default_config.toml` 改值、断言与文档注释同步
+- **马娘数据订正**：`umaDB.json` 若干 `raceNote` 文案订正；三后冠路线马娘 `races` 31 → 30，`raceNote` 改为「第一年底选择樱花赏(+第二年女王杯)」
+- **清理失效测试**：删除 `reason.rs::test_color_thresholds`（着色门限已被「按分排序 + 与首选分差着色」取代）
+
+## 2026-10-06
+- **修复 PT 上段上限口径**：PT 上段上限由 `100 + status_limit + pt_limit` 改为 `100 + pt_limit`（属性仍为 `100 + status_limit`）。超级拉面选项 `training_limit_options` 的 +100 源自「○○以外獲得上限+100」，属属性口径，不该叠加进 PT 上限（此前 turn72 速训练 PT 上限被算成 300、显示 346pt，实际 200、263pt）。同时补齐：普通回合吃面的 `ramen_basic_effect.status_limit`（「獲得上限アップ」，Y2 +20 / Y3 +40）对属性与 PT 上限**同值生效**，故 PT 上限也吃这 20/40。三处公式（`apply_ramen_training_effect` / `apply_ramen_training_value` / `RamenGame::calc_training_value`）同步，`calc_normal_effect` 把 `basic.status_limit` 同时累加到 `pt_limit`，并补 turn72 回归单测、普通回合 PT 上限单测与 memo 口径修正；4 个 golden 基线（bench / flat_search / ramen_mcts_trainer×2）随行为变更重抓
+- **五维评分表改用 URA `StatusToPoint`**：`gamedata/constants.json` 的 `five_status_final_score` 由本地表（raw 索引 3399 项）换为 UmamusumeResponseAnalyzer 的权威表——以显示值索引的 2501 项 `StatusToPoint` 为源，经 `raw[r] = ura[cut(r)]` 展开回未减半索引，长度 3802（raw 0..3801）。显示值 0..2000（raw 0..2800）两表逐位相等，差异仅在显示值 ≥2001（raw ≥2802），AI 端此前在该区间整体偏高（如显示值 2250 高 273 分、≥2300 越界饱和）。新增生成脚本 `scripts/gen_five_status_final_score.py`（含一致性断言），`config.rs` 字段与 `status_final_score` 文档注释同步；只手写策略的 marginal gain 随表变化，决策路径与 4 个 golden 基线一并重抓。**其它副本（`Ramen_AI_0.2/`、`umaai-review-skill/data/`）本轮未同步**
+
 ## 2026-10-05
 - **NN rollout 研究工具链交接**：拉面续跑基策改为可装载共享网络的包装器，支持绝对回合窗口、友人完成门限与推理观测，先装网络再设门限不再冲掉网络；保留原有构造写法，默认仍为推荐手写策略
 - **搜索严格失败与批量后端**：网络续跑默认严格模式，部分 rollout 失败直接报错；新增可选批量 rollout 后端接口与原始结果表（不支持的配置与缺项一律报错），以及搜索 / 决策成本探针
