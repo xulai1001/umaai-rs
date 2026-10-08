@@ -98,6 +98,9 @@ pub struct BriefView {
     pub five_rows: Vec<FiveRow>,
     pub five_limit: String,
     pub five_capped: String,
+    // §1.2 训练画像（增长顺序与运气归属）
+    pub training_rows: Vec<String>,
+    pub training_luck: String,
     // §2 运气走势
     pub series_count: usize,
     pub year_boundaries: String,
@@ -178,6 +181,8 @@ pub struct DeviationRow {
     pub stage: String,
     pub ai: String,
     pub actual: String,
+    /// 实际动作对应的候选（`#2 力训练`；偏离主要是选了 2-3 选——`—` = 候选外）
+    pub alt: String,
     pub five: String,
     pub vital: String,
     pub doubt: String,
@@ -209,6 +214,7 @@ pub fn build_view(d: &Digest) -> BriefView {
 
     fill_overview(&mut v, d, &states);
     fill_five(&mut v, d, &states);
+    fill_training(&mut v, d);
     fill_luck(&mut v, d);
     fill_extremes(&mut v, d);
     fill_inherit(&mut v, d);
@@ -250,15 +256,23 @@ fn fill_overview(v: &mut BriefView, d: &Digest, states: &BTreeMap<u32, TurnState
         format!("{} 张：{}", d.meta.deck.len(), deck)
     };
     v.score_line = match (&d.meta.final_score, &d.meta.rank) {
-        // 数据来源分流：真机终局帧（含全部结局事件）vs 末快照估算（缺结局事件 ≈ -2700）
-        (Some(score), Some(rank)) => format!(
-            "终局评分：{score}（{rank}）  口径：{}",
-            if d.meta.final_source == "final_frame" {
-                "真机终局帧（育成结束·点技能前，含全部结局事件），未计「努力家」等新状态与已学技能分"
-            } else {
-                "末快照估算（缺结局事件 ≈ -2700），未计「努力家」等新状态"
-            }
-        ),
+        // 数据来源分流：真机终局帧（含全部结局事件）vs 末快照估算（缺结局事件 ≈ -2700）。
+        // 评分 = AI 端按实际终局五维 + 技能点的估算（PT 折算高于实际买分）→ 略高于小黑板实际
+        (Some(score), Some(rank)) => {
+            let state = match (d.meta.is_qiezhe, d.meta.is_xiao_qie) {
+                (true, _) => "，已计切者 PT×1.1",
+                (false, true) => "，已计小切 PT×1.04",
+                _ => ""
+            };
+            format!(
+                "终局评分：{score}（{rank}）  口径：AI 端按实际终局五维+技能点估算（略高于小黑板实际）{state}，不含已学技能分；来源 {}",
+                if d.meta.final_source == "final_frame" {
+                    "真机终局帧"
+                } else {
+                    "末快照（另缺结局事件 ≈ -2700，相对再偏低）"
+                }
+            )
+        }
         _ => "终局评分：不可用（gamedata 缺失，纯 ID 口径）".to_string(),
     };
     let (comparable, matched, mismatch) = exec_counts(&d.execution);
@@ -338,6 +352,46 @@ fn fill_five(v: &mut BriefView, d: &Digest, states: &BTreeMap<u32, TurnState>) {
     } else {
         format!("触顶维（真实值达上限）：{}", capped.join("、"))
     };
+}
+
+// —————————————————————————— §1.2 训练画像 ——————————————————————————
+
+/// 训练画像（逐年「训练次数 / 五维净增」一行 + 运气归属行）
+///
+/// 增长先后顺序（如先耐后速）与「涨运气的训练类型」由 SKILL 层结合卡组判读；
+/// 本模块只做预格式化数字行（口径见 `profile` 模块头）。
+fn fill_training(v: &mut BriefView, d: &Digest) {
+    for y in &d.training.years {
+        let counts = y
+            .train_counts
+            .iter()
+            .zip(ATTR_NAMES.iter())
+            .map(|(&c, n)| format!("{n}{c}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        let gains = y
+            .gains
+            .iter()
+            .zip(ATTR_NAMES.iter())
+            .map(|(&g, n)| format!("{n}{g:+}"))
+            .collect::<Vec<_>>()
+            .join("/");
+        v.training_rows.push(format!(
+            "{}：训练 {} 次；净增 {}（含事件/继承/比赛）",
+            y.label, counts, gains
+        ));
+    }
+    let luck = ATTR_NAMES
+        .iter()
+        .zip(d.training.luck_by_attr.iter())
+        .map(|(n, &l)| format!("{n}{}", signed_f(l)))
+        .collect::<Vec<_>>()
+        .join(" / ");
+    v.training_luck = format!(
+        "运气归属（回合合计 Δ 计入当回合实际训练维）：{luck} / 其他 {} / 程序性大波动回合 {}（自选 swing 与学技能，已剔除）",
+        signed_f(d.training.luck_other),
+        signed_f(d.training.luck_program)
+    );
 }
 
 // —————————————————————————— §2 运气走势 ——————————————————————————
@@ -563,6 +617,10 @@ fn fill_deviations(v: &mut BriefView, d: &Digest, states: &BTreeMap<u32, TurnSta
             stage: r.stage.clone(),
             ai: r.ai_choice.clone(),
             actual: r.actual_action.clone(),
+            alt: r
+                .alt_candidate
+                .clone()
+                .unwrap_or_else(|| "—".to_string()),
             five: r
                 .evidence
                 .five_status_delta
@@ -783,6 +841,8 @@ mod tests {
             final_score: Some(67962),
             rank: Some("US4".to_string()),
             final_source: "last_snapshot".to_string(),
+            is_qiezhe: false,
+            is_xiao_qie: false,
         }
     }
 
@@ -796,6 +856,7 @@ mod tests {
             schedule: Schedule::default(),
             inherit: None,
             clones: None,
+            training: Default::default(),
             coverage: Default::default(),
             findings: vec![],
             context: DigestContext {
@@ -829,6 +890,8 @@ mod tests {
             feeling_stock: vec![],
             super_ramen: -1,
             is_ill: false,
+            is_qiezhe: false,
+            is_xiao_qie: false,
             race_count: 0,
             absent_persons: vec![],
         }
@@ -842,6 +905,13 @@ mod tests {
         assert_eq!(v.game, 1);
         assert!(v.uma_line.contains("测试马"));
         assert!(v.score_line.contains("67962"));
+        assert!(v.score_line.contains("不含已学技能分"), "点技能前口径注记");
+        assert!(!v.score_line.contains("切者"), "无切者不打状态括注");
+        let mut dq = empty_digest();
+        dq.meta.is_qiezhe = true;
+        let vq = build_view(&dq);
+        println!("切者局 score_line: {}", vq.score_line);
+        assert!(vq.score_line.contains("已计切者 PT×1.1"), "切者局应打状态括注");
         assert!(v.luck_line.contains("-2977"), "终局运气分四舍五入");
         assert!(v.luck_line.contains("判「这局运气差」"));
         assert!(v.health_line.contains("数据健康度"));
@@ -954,6 +1024,7 @@ mod tests {
                 actual_action: "力训练".to_string(),
                 matches: Some(false),
                 evidence: Evidence { five_status_delta: [0, 0, 99, 0, 0], vital_delta: -20, ..Default::default() },
+                alt_candidate: Some("#2 力训练".to_string()),
             },
             ExecRow {
                 turn: 70,
@@ -962,11 +1033,14 @@ mod tests {
                 actual_action: "休息".to_string(),
                 matches: Some(false),
                 evidence: Evidence { five_status_delta: [0, 0, 0, 0, 0], vital_delta: 25, ..Default::default() },
+                alt_candidate: None,
             },
         ];
         let v = build_view(&d);
         println!("{v:#?}");
         assert_eq!(v.deviations.len(), 2);
+        assert_eq!(v.deviations[0].alt, "#2 力训练", "对应候选列");
+        assert_eq!(v.deviations[1].alt, "—", "无对应候选 → 占位符");
         assert!(v.deviations[0].doubt.contains("建议维速已触顶（1200/1200）"));
         assert!(v.deviations[1].doubt.contains("卡休息判定线 25"));
         assert!(v.match_line.contains("0.0%（可比 2 / 一致 0 / 偏离 2）"));

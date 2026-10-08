@@ -20,7 +20,7 @@ use std::{fs, path::PathBuf, process::ExitCode};
 use anyhow::{Context as _, Result, anyhow};
 use lexopt::{Arg, ValueExt};
 
-use umaai_review::{brief, checks, clones, decisions, digest, execution, gdata, inherit, pack, report, schedule, timeline};
+use umaai_review::{brief, checks, clones, decisions, digest, execution, gdata, inherit, pack, profile, report, schedule, timeline};
 use umasim::{game::SupportCard, gamedata::GAMEDATA, utils::load_game_config};
 
 /// CLI 参数（lexopt，与项目主 bin 惯例一致）
@@ -209,6 +209,10 @@ fn run() -> Result<()> {
     };
     let clones_block = clones::build(&p.snaps, card_types.as_deref(), &exec);
 
+    // 训练画像（逐年训练次数 × 五维净增 × 运气归属；增长顺序分析用）。
+    // 传 flags：自选 swing / 学技能回合的 Δ 归 luck_program，不带偏训练归属
+    let training = profile::build(&tl.rows, &exec.rows, &dec.rows, &flags);
+
     let inputs = digest::Inputs {
         pack: &p,
         timeline: &tl,
@@ -219,6 +223,7 @@ fn run() -> Result<()> {
         flags,
         inherit: Some(inherit_block.clone()),
         clones: clones_block.clone(),
+        training: training.clone(),
         extra_findings: extra_findings.clone(),
         gamedata_bundled,
     };
@@ -251,7 +256,17 @@ fn run() -> Result<()> {
         dec.luck.top_gain.iter().map(|t| (t.turn, t.delta as i64)).collect::<Vec<_>>()
     );
     match (&d.meta.final_score, &d.meta.rank) {
-        (Some(s), Some(r)) => println!("终局评分: {s}（{r}）"),
+        (Some(s), Some(r)) => println!(
+            "终局评分: {s}（{r}，来源 {}{}）",
+            d.meta.final_source,
+            if d.meta.is_qiezhe {
+                "，切者×1.1"
+            } else if d.meta.is_xiao_qie {
+                "，小切×1.04"
+            } else {
+                ""
+            }
+        ),
         _ => println!("终局评分: 不可用（gamedata 缺失）"),
     }
     if exec.comparable > 0 {
@@ -296,6 +311,46 @@ fn run() -> Result<()> {
             cl.super_ramen_clones.rainbow_clones,
             cl.super_ramen_clones.rainbow_luck,
             cl.super_ramen_clones.rainbow_strategy
+        );
+    }
+    // 训练画像摘要：每年「训练次数 / 净增」领先维 + 全局运气归属最大维
+    {
+        let attr = ["速", "耐", "力", "根", "智"];
+        let years: Vec<String> = training
+            .years
+            .iter()
+            .map(|y| {
+                let (ci, c) = y
+                    .train_counts
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, c)| **c)
+                    .map(|(i, c)| (attr[i], *c))
+                    .unwrap_or(("-", 0));
+                let (gi, g) = y
+                    .gains
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, g)| **g)
+                    .map(|(i, g)| (attr[i], *g))
+                    .unwrap_or(("-", 0));
+                format!("{} 训{ci}×{c} 增{gi}{g:+}", y.label)
+            })
+            .collect();
+        let (li, l) = training
+            .luck_by_attr
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(i, l)| (attr[i], *l))
+            .unwrap_or(("-", 0.0));
+        println!(
+            "训练画像: {}；运气归属最大 {}{:+.0}（非训练回合 {:+.0}，程序性大波动回合 {:+.0}）",
+            years.join(" / "),
+            li,
+            l,
+            training.luck_other,
+            training.luck_program
         );
     }
     println!("digest: {}", digest_path.display());

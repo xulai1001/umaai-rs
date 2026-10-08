@@ -127,6 +127,8 @@ mod tests {
             feeling_stock: vec![],
             super_ramen: -1,
             is_ill: false,
+            is_qiezhe: false,
+            is_xiao_qie: false,
             race_count: 0,
             absent_persons: vec![]
         }
@@ -140,7 +142,8 @@ mod tests {
             ai_choice: String::new(),
             actual_action: actual.to_string(),
             matches: None,
-            evidence: Evidence::default()
+            evidence: Evidence::default(),
+            alt_candidate: None
         }
     }
 

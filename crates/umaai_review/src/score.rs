@@ -1,18 +1,25 @@
 //! 终局评分与等级换算（文档 §3.4）
 //!
-//! 快照里没有最终评分（`skillScore` 恒 0），需自行计算：**五维加权 + 技能分**。
+//! 快照里没有最终评分（`skillScore` 恒 0），需自行计算：**五维查表 + PT 折算**。
 //! 口径与 `umasim::game::Uma::calc_score` 同源（`status_final_score` 查表 +
 //! `total_pt × pt_score_rate` + `skill_score`），等级换算直接复用
 //! `GameConstants::get_rank_name`（与 `rank.csv` 同表）。
 //!
-//! ⚠ 已学技能分数无法从包内还原（快照 `skillScore` 恒 0）→ `final_score`
-//! **仅供参考**：略低于实际小黑板分数，且未计入「努力家」等新状态；
-//! 该前提写进 digest.context。
+//! 切者（能人，状态 7）×1.1 / 小切（勤勉好学，状态 40）×1.04 的 PT 项加成
+//! 与模拟侧同步计入（2026-10-01 起 `calc_score` 生效）：快照路径直接读
+//! `baseGame.isQieZhe` / `isXiaoQie`；终局帧不带该标志，由调用方从末快照
+//! 代入（见 `digest::build`）。
+//!
+//! ⚠ 已学技能分数无法从包内还原（`skillScore` 恒 0）→ `final_score` 是 **AI 端
+//! 按实际终局五维与技能点的估算**：PT 折算高于实际买技能的得分，故通常
+//! **略高于**小黑板与实际分数（用户口径 2026-10-07）；该前提写进 digest.context。
 
 use umaai::protocol::{FinalScorePayload, GameStatusBase};
-use umasim::{game::Uma, global, gamedata::GAMECONSTANTS, utils::Array5};
+use umasim::{game::{Uma, UmaFlags}, global, gamedata::GAMECONSTANTS, utils::Array5};
 
 /// 终局评分（`Uma::calc_score` 同源口径；需已 `gdata::init`）
+///
+/// 切者/小切按 `baseGame.isQieZhe` / `isXiaoQie` 计入 PT 项加成。
 pub fn final_score(base: &GameStatusBase) -> i32 {
     let uma = Uma {
         five_status: base.five_status,
@@ -20,6 +27,11 @@ pub fn final_score(base: &GameStatusBase) -> i32 {
         skill_pt: base.skill_pt,
         skill_score: base.skill_score,
         total_hints: base.total_hints,
+        flags: UmaFlags {
+            qiezhe: base.is_qiezhe,
+            xiaoqie: base.is_xiao_qie,
+            ..Default::default()
+        },
         ..Default::default()
     };
     uma.calc_score()
@@ -31,13 +43,17 @@ pub fn final_score(base: &GameStatusBase) -> i32 {
 /// 事件（育成结束 `401407` / 通用 `5011` / 友人结束）与末回合比赛奖励，故比分末
 /// 快照估算高约 2700 分。`skill_score` 仍暂未随帧下发（恒 0）；`total_hints`
 /// 自插件 2026-10 起随帧下发（旧帧缺省 0），与 [`final_score`] 同口径。
-pub fn final_score_from_frame(p: &FinalScorePayload) -> i32 {
+///
+/// 帧内**无切者/小切标志**：由调用方从末份快照的 `isQieZhe` / `isXiaoQie` 代入
+/// （快照缺失时传 `(false, false)`，加成不计）。
+pub fn final_score_from_frame(p: &FinalScorePayload, qiezhe: bool, xiaoqie: bool) -> i32 {
     let uma = Uma {
         five_status: p.five_status,
         five_status_limit: p.five_status_limit,
         skill_pt: p.skill_pt,
         skill_score: 0,
         total_hints: p.total_hints,
+        flags: UmaFlags { qiezhe, xiaoqie, ..Default::default() },
         ..Default::default()
     };
     uma.calc_score()
@@ -116,10 +132,44 @@ mod tests {
             total_hints: frame.total_hints,
             ..Default::default()
         };
-        let from_frame = final_score_from_frame(&frame);
+        let from_frame = final_score_from_frame(&frame, false, false);
         let from_snapshot = final_score(&base);
         println!("终局帧评分={from_frame} 快照口径评分={from_snapshot} 等级={}", rank_name(from_frame));
         assert_eq!(from_frame, from_snapshot, "两种来源同口径：同一数值必须同分");
+        Ok(())
+    }
+
+    /// 切者 / 小切 PT 项加成：×1.1 / ×1.04 只放大 PT 分量（2026-10-01 口径）
+    #[test]
+    fn test_qiezhe_xiaoqie_pt_factor() -> anyhow::Result<()> {
+        let root = umasim::utils::get_workspace_root()?;
+        std::env::set_current_dir(&root)?;
+        umasim::gamedata::init_global()?;
+
+        let frame: FinalScorePayload = serde_json::from_str(
+            r#"{
+                "scenarioId": 14, "single_mode_chara_id": 6243, "turn": 77, "state": 2,
+                "fiveStatus": [3242, 2222, 1723, 1134, 2398],
+                "fiveStatusLimit": [3242, 2444, 2206, 2200, 2506],
+                "skillPt": 7987, "totalHints": 21
+            }"#
+        )?;
+        let none = final_score_from_frame(&frame, false, false);
+        let qiezhe = final_score_from_frame(&frame, true, false);
+        let xiaoqie = final_score_from_frame(&frame, false, true);
+        println!("无状态={none} 切者={qiezhe} 小切={xiaoqie}");
+        assert!(qiezhe > xiaoqie && xiaoqie > none, "×1.1 > ×1.04 > ×1.0");
+
+        // 交叉验证：增量 = PT 分量 × (factor − 1)，五维分不受影响
+        // （口径与 score_parts 一致：total_pt floor 后整体乘 rate × factor 再截断）
+        let cons = global!(GAMECONSTANTS);
+        let total_pt = (frame.skill_pt as f32 + frame.total_hints as f32 * cons.hint_pt_rate).floor() as i32;
+        let pt_f = total_pt as f32 * cons.pt_score_rate;
+        let expect_qiezhe = (pt_f * 1.1) as i32 - pt_f as i32;
+        let expect_xiaoqie = (pt_f * 1.04) as i32 - pt_f as i32;
+        println!("total_pt={total_pt} pt_f={pt_f} 切者增量(期望)={expect_qiezhe} 实际={}", qiezhe - none);
+        assert_eq!(qiezhe - none, expect_qiezhe, "切者增量 = PT 分量 × 0.1");
+        assert_eq!(xiaoqie - none, expect_xiaoqie, "小切增量 = PT 分量 × 0.04");
         Ok(())
     }
 

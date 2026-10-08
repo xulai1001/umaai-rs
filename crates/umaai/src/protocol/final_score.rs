@@ -100,8 +100,8 @@ impl FinalScorePayload {
     /// 按 `Uma::calc_score` 同源口径计算终局评分（五维查表 + PT 折算）
     ///
     /// `skill_score` 恒 0（本通道不携带已学技能分）、`pt_score_rate_factor` 恒 1.0
-    /// （帧内无切者 / 小切标志）——与 `umaai_review::score::final_score_from_frame` 一致，
-    /// 属「点技能前」的口径，略低于小黑板最终分。
+    /// （帧内无切者 / 小切标志——`umaai_review` 复盘侧从末快照代入该标志，此处
+    /// 仅做显示不引入快照依赖）——属「点技能前」的口径，略低于小黑板最终分。
     ///
     /// # Panics
     ///

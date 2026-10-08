@@ -49,6 +49,11 @@ pub struct TimelineRow {
     /// 超级拉面档位（-1 未选 / 0/1/2）
     pub super_ramen: i32,
     pub is_ill: bool,
+    /// 是否切者（能人，状态 7）：终局评分 PT 项 ×1.1；由 false→true 的回合即获得回合，
+    /// 该回合 T(n) 有 PT 项 ×1.1 量级的期望跳升（真实好运）
+    pub is_qiezhe: bool,
+    /// 是否小切（勤勉好学，状态 40）：PT 项 ×1.04；局外获得，局内恒定
+    pub is_xiao_qie: bool,
     /// 跑赢的比赛数（`raceHistory` 只记跑赢的比赛）
     pub race_count: usize,
     /// 缺席人物索引 0-5（§5.5 反推；`personDistribution` 不可判定时为空）
@@ -66,6 +71,12 @@ pub struct TimelineResult {
     pub first_status: Option<GameStatusRamen>,
     /// 末个解析成功的快照（终局评分 / raceHistory；无快照时 `None`）
     pub last_status: Option<GameStatusRamen>,
+    /// 是否有**任一**快照携带非空 `keyEvents`（2026-10-01 起插件下发）
+    ///
+    /// 用于 digest 的录制年代注记（支援卡连续事件进度是否对齐）。不能只看末快照：
+    /// 实测 game6263 的末快照（turn77_2）keyEvents 为空而前 142 份非空——末帧是
+    /// 收尾特例（turn 0 同理为空），「任一非空」才是录制侧支持该字段的可靠信号。
+    pub key_events_seen: bool,
 }
 
 /// 阶段判定（返回 (stage, skip 原因)；reason = `Some` 即不派发的 `Begin` 快照）
@@ -154,10 +165,12 @@ pub fn build(snaps: &[SnapEntry]) -> TimelineResult {
     let mut parse_errors = Vec::new();
     let mut first_status: Option<GameStatusRamen> = None;
     let mut last_status: Option<GameStatusRamen> = None;
+    let mut key_events_seen = false;
     for s in snaps {
         let text = String::from_utf8_lossy(&s.bytes);
         match serde_json::from_str::<GameStatusRamen>(&text) {
             Ok(st) => {
+                key_events_seen |= !st.base_game.key_events.is_empty();
                 let (stage, reason) = stage_of(&st);
                 let base = &st.base_game;
                 rows.push(TimelineRow {
@@ -181,6 +194,8 @@ pub fn build(snaps: &[SnapEntry]) -> TimelineResult {
                     feeling_stock: st.ramen.feeling_stock.clone(),
                     super_ramen: st.ramen.super_ramen,
                     is_ill: base.is_ill,
+                    is_qiezhe: base.is_qiezhe,
+                    is_xiao_qie: base.is_xiao_qie,
                     race_count: base.race_history.len(),
                     absent_persons: absent_persons(&base.person_distribution),
                 });
@@ -192,7 +207,7 @@ pub fn build(snaps: &[SnapEntry]) -> TimelineResult {
             Err(e) => parse_errors.push((s.file.clone(), e.to_string())),
         }
     }
-    TimelineResult { rows, parse_errors, first_status, last_status }
+    TimelineResult { rows, parse_errors, first_status, last_status, key_events_seen }
 }
 
 #[cfg(test)]
@@ -295,10 +310,24 @@ mod tests {
         assert_eq!(r.rows[0].race_count, 2, "raceHistory=[11,28]");
         assert_eq!(r.rows[0].stage, "Train");
         assert_eq!(r.rows[0].five_status_display, [100, 200, 300, 400, 500], "阈值内显示值 = 真实值");
+        assert!(!r.rows[0].is_qiezhe && !r.rows[0].is_xiao_qie, "默认无切者/小切");
         assert_eq!(r.rows[1].selected_regions, vec![1, 2, 3]);
         assert_eq!(r.rows[1].scenario_pt, 0);
         assert!(r.first_status.is_some() && r.last_status.is_some());
         assert_eq!(r.last_status.as_ref().unwrap().base_game.turn, 5);
+    }
+
+    /// 切者/小切标志解析（isQieZhe / isXiaoQie → timeline 字段）
+    #[test]
+    fn test_qiezhe_flags_parsed() {
+        let json = fixture(5, "command", 1, 2, &[1, 2, 3])
+            .replace(r#""isQieZhe": false"#, r#""isQieZhe": true"#)
+            .replace(r#""isXiaoQie": false"#, r#""isXiaoQie": true"#);
+        let snaps = vec![snap("game6234_turn5.json", 5, 0, &json)];
+        let r = build(&snaps);
+        println!("is_qiezhe={} is_xiao_qie={}", r.rows[0].is_qiezhe, r.rows[0].is_xiao_qie);
+        assert!(r.rows[0].is_qiezhe, "isQieZhe=true 应解析");
+        assert!(r.rows[0].is_xiao_qie, "isXiaoQie=true 应解析");
     }
 
     /// 人物缺席反推（含 NPC 占位 8 与全空数组容忍）

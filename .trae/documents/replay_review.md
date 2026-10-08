@@ -66,8 +66,20 @@ cargo run --release -p umaai_review -- --zip logs/game421.zip [--out logs/game42
 
 ### 3.4 终局评分
 
-快照里**没有**最终评分（`skillScore` 恒为 0），需自行计算（五维加权 + 技能分），
-再用 `master_mdb_data/rank.csv`（`id,min_value,max_value,rank_name`）换算等级。
+快照里**没有**最终评分（`skillScore` 恒为 0）。终局数据**优先用真机终局帧**
+（`game{id}_final.json`，育成结束·点技能前，含全部结局事件与末回合比赛奖励，
+2026-09-30 起的独立信道）；缺失时回落末份快照估算（缺结局事件 ≈ -2700）。
+`meta.final_source` 标注来源，`criteria` 与简报按来源分流措辞。
+
+评分由 `Uma::calc_score` 同源计算（五维查表 `status_final_score` + PT 折算 +
+Hint 折算 + 切者/小切 PT 项加成——切者（能人，状态 7）×1.1 / 小切（勤勉好学，
+状态 40）×1.04，2026-10-01 起生效；终局帧无该标志，按末快照 `isQieZhe` /
+`isXiaoQie` 代入）。等级换算用 `rank.csv` 同表（`GameConstants::get_rank_name`）。
+已学技能分不在任何来源内——**AI 端按实际终局五维与技能点的估算，通常略高于
+小黑板实际分**（PT 折算高于实际买技能的得分，用户口径 2026-10-07）。
+
+五维评分表自 2026-10-06 起改用 URA `StatusToPoint` 权威表展开
+（`gamedata/constants.json` 的 `five_status_final_score`，长度 3802）。
 
 ### 3.5 digest.json schema
 
@@ -75,19 +87,25 @@ cargo run --release -p umaai_review -- --zip logs/game421.zip [--out logs/game42
 {
   "meta":      { "game","uma_id","uma_name","deck":[{"card_id","name","card_type","limit_break"}],
                  "start_turn","mid_entry","end_reason","snapshots","decision_rows",
-                 "total_luck_end","final_score","rank" },
+                 "total_luck_end","final_score","rank",
+                 "final_source":"final_frame|last_snapshot|unavailable",
+                 "is_qiezhe","is_xiao_qie" },
   "timeline":  [ { "turn","seq","stage","source","playing_state",
-                   "vital","max_vital","motivation","five_status","five_status_limit",
+                   "vital","max_vital","motivation","five_status","five_status_display",
+                   "five_status_limit",
                    "skill_pt","train_level_count","friend_outgoing_used",
-                   "selected_regions","scenario_pt","super_ramen","is_ill","race_count",
+                   "selected_regions","scenario_pt","super_ramen","is_ill",
+                   "is_qiezhe","is_xiao_qie","race_count",
                    "absent_persons":[…] } ],
   "decisions": [ { "file","turn","seq","stage","kind",
                    "candidates":[{"rank","desc","score","n","gap_to_best"}],
                    "chosen":{"idx","desc","action_luck"},
                    "t_n_raw","t_n_display","total_luck","turn_delta","chain_len" } ],
-  "execution": [ { "turn","stage","ai_choice","actual_action","match","evidence":{…} } ],
+  "execution": [ { "turn","stage","ai_choice","actual_action","match","alt_candidate":"#2 力训练","evidence":{…} } ],
   "luck":      { "series":[…],"top_gain":[…],"top_loss":[…],"raw_delta_stats":{…},
                  "flagged_turns":[…] },
+  "training":  { "years":[{"label","train_counts":[…],"gains":[…]}],
+                 "luck_by_attr":[…],"luck_other":0 },
   "schedule":  { "mandatory_turns":[…],
                  "free_races":[{"start_turn","end_turn","required","picked_turns":[…]}],
                  "notes":[…] },
@@ -210,9 +228,10 @@ persons 索引 0-5 = 6 张训练卡；personDistribution 中还会出现 6/7/8+�
 
 > **归因口径（用户拍板，2026-09-23）**：目标赛未跑赢、超拉期连亏、掉干劲本身均
 > 归**运气**而非操作（输赛是随机结果、掉干劲由输赛带来、超拉估值走低是随机
-> 落地差）；「掉干劲后未主动恢复」是已知偏差②导致的决策倾向，作观察项。
+> 落地差）；「掉干劲后未主动恢复」原是连续事件偏差（旧 6.8 偏差②）导致的决策
+> 倾向，该偏差 2026-10-01 已修复、新录制缓解，仍作观察项。
 
-**「心情掉落后未及时恢复」**（由 6.8 的已知 bug 直接推导，**是本清单里第一个已验证的项**）：
+**「心情掉落后未及时恢复」**（旧 6.8 偏差②直接推导，**是本清单里第一个已验证的项**）：
 
 ```
 判据：motivation 下降后 N 回合内（建议 N=3）
@@ -227,7 +246,7 @@ turn 45~49  连续 5 回合无出行/休息，motivation 停在 4
 turn 50  4 -> 5      （由事件恢复，非 AI 主动）
 ```
 
-对应 6.8 的成因：AI 认为"后面的支援卡事件会把心情补回来"，所以不主动恢复。
+对应旧 6.8 偏差②的成因：AI 认为"后面的支援卡事件会把心情补回来"，所以不主动恢复。
 
 **训练失败判据**（已实测校正，原「体力腰斩」错误）：正常训练体力消耗是**固定量**（`scenario_ramen.training_basic_value`
 给出准确值，随训练等级 −20~−25，与 `max_vital` 无关）；成功训练的对应属性增长实测 +13~+134。
@@ -386,7 +405,12 @@ turn 35   [ −612.8(吃面/阪神-耐力), +141.5(力训练)]
 
 ### 6.7 伪波动标记
 
-`luck.flagged_turns` 标出程序性波动位置，归因时**降级或跳过**：
+> 2026-10-07 更新（用户拍板）：跨年假跳经 2026-10 各项修复后**基本消除**，
+> 本节标记**检测保留**、但读法从「降级或跳过」改为**按性质归因**（年界结算 /
+> 继承落地 / 地区选择本身）——标记位置的跳变如今大多是真实变化，仅再出现
+> 一增一减的配对式大幅账面波动时才降级。下表的形态与实测数字为修复前口径。
+
+`luck.flagged_turns` 标出位置标记，归因时**按性质读**：
 
 | 位置 | 判定 | 形态与成因 |
 |---|---|---|
@@ -413,24 +437,29 @@ turn 35   [ −612.8(吃面/阪神-耐力), +141.5(力训练)]
 > ⚠️ 上一版曾把 `RegionSelect` 阶段的正跳（实测 +909 / +2005）当作**独立的**第三类伪波动 —— 这是错的。
 > 它就是「年界增减对」的前半段，不应重复计数。
 
-### 6.8 已知偏差（影响运气分读法）
+### 6.8 残余偏差与旧局包注记（影响运气分读法）
+
+> 2026-10 更新：原「已知偏差」两条已先后修复——RMJ 双重结算（2026-10-01
+> `trainLevelCount` 不再补剧本加成）与 region_select 计入运气（2026-10-03 起整段
+> 跳过）；支援卡连续事件进度自 2026-10-01 起由 `apply_key_events`（小黑板
+> keyEvents 归一）对齐。下表为当前口径。
 
 | 偏差 | 方向 | 影响范围 |
 |---|---|---|
-| **RMJ 结算时机可能与实际数据不符**（实际已含结算而模拟又结算一次） | 运气**虚高** | 局部（年界附近） |
-| **支援卡连续事件进度未统计** | 模拟高估好事件 → **系统性压低显示的运气分** | **整条曲线**，非局部 |
+| **RMJ 结算结果按「每年成功」假设补齐**（重放路径无从知道真机实际成败） | 真机若失败 → 该年起期望**偏高** | 全局（仅失败年份） |
+| **旧局包按录制年代带历史偏差**（digest criteria 按局包内容自动标注） | 见下 | 仅旧录制 |
 
-**第 2 条的机制**（决定了它不是纯数值问题）：
+旧局包注记（bin 自动判定，写进 `context.criteria`）：
 
-> 第 1 回合时模拟预计「后面还有 15 个支援卡事件」；实际游玩到第 24 回合时**已经发生了若干但未被记录**，
-> 模拟仍然按「后面还有 15 个」估算 → 后续模拟里**多发生了这些事件**。而这些事件**经常加心情**。
+- **2026-10-01 前录制**（快照无 keyEvents）：支援卡连续事件进度未对齐 →
+  模拟高估好事件 → **整条曲线系统性略偏低**，`total_luck_end` 按偏低读
+  （`< -2000` 判「运气差」的阈值即按该口径标定，保留作保守线）；
+- **2026-10-03 前录制**：turn 2 有链式推进漏加 NPC 的 **+1300 量级假跳**；
+- **2026-10-07 前录制**：turn 71→72 有 URA 赛后加成丢失的 **−1000 量级假跳**
+  （修复后同位置收敛 −388 量级）。
 
-由此产生两个后果，都要在报告里体现：
-
-1. **数值上**：模拟里心情偏高 → 估分偏高 → 显示的运气分被**系统性压低**。
-   故终局 `total_luck_end` **不能直接当「这局运气差」读**，归因文案必须带这个前提。
-2. **策略上**（更严重）：AI 认为"后面的事件会把心情补回来"，因此**掉心情后不主动回复心情**。
-   ➜ 这是一个**可直接验证的坏手法检查项**，见 6.1「心情掉落后未及时恢复」。
+「掉心情后不主动恢复」原是连续事件偏差的策略后果（模拟高估事件回复），
+新录制已缓解；检查项（6.1）仍观测该行为，作观察项与改进方向。
 
 ### 6.9 AI 建议 vs 实际执行偏离
 
@@ -487,7 +516,7 @@ turn 53 -> 54   五维Δ=[316,10,104,1,38]  Σ+469   行动=速训练   继承�
 [表1] 检查项命中清单（回合 / 类型 / 证据 / 严重度）
 [表2] 继承质量（两次继承的属性贡献 vs 参考值）
 [表3] 决策明细（默认只显 calc 行）
-[口径说明] criteria 列表（含已知 bug 与固定波动区读数须知）；赛程 / 覆盖等
+[口径说明] criteria 列表（含残余偏差、旧局包录制年代注记与固定波动区读数须知）；赛程 / 覆盖等
            数据块不落报告，由 SKILL 层叙事化后再考虑显示形式
 ```
 

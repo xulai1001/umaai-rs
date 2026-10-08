@@ -93,6 +93,11 @@ pub struct ExecRow {
     pub matches: Option<bool>,
     /// 状态差证据（§5.4 签名表全量）
     pub evidence: Evidence,
+    /// 偏离一选时实际动作对应的候选（如 `#2 力训练`）——用户口径：偏离主要是
+    /// **选了 2-3 选**而非完全不听建议；实际动作命中候选表 #2 起的某项时标注，
+    /// `None` = 未命中任何候选（推断失准或候选外操作）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alt_candidate: Option<String>,
 }
 
 /// 状态差证据（锚点快照 → 下一回合首份快照）
@@ -191,15 +196,30 @@ pub fn build(tl: &[TimelineRow], dec: &[DecRow], race_turns: &[i32]) -> Executio
         if matches == Some(true) {
             matched += 1;
         }
+        // 偏离一选 → 找实际动作对应的候选（#2 起；用户口径：偏离主要是选了 2-3 选）
+        let alt_candidate = if matches == Some(false) {
+            anchor
+                .candidates
+                .iter()
+                .filter(|c| c.rank >= 2)
+                .find(|c| map_choice(&c.desc).is_some_and(|m| m == actual.as_str()))
+                .map(|c| format!("#{} {}", c.rank, c.desc))
+        } else {
+            None
+        };
         if matches == Some(false) {
             findings.push(Finding {
                 kind: "execution_mismatch".to_string(),
                 turn: *turn,
                 file: Some(anchor.file.clone()),
                 evidence: format!(
-                    "ai_choice={} actual={} five_delta={:?} vital={} friend={} race={}",
+                    "ai_choice={} actual={}{} five_delta={:?} vital={} friend={} race={}",
                     anchor.chosen.desc,
                     actual,
+                    alt_candidate
+                        .as_ref()
+                        .map(|s| format!("（对应候选 {s}）"))
+                        .unwrap_or_default(),
                     ev.five_status_delta,
                     ev.vital_delta,
                     ev.friend_outgoing_delta,
@@ -215,6 +235,7 @@ pub fn build(tl: &[TimelineRow], dec: &[DecRow], race_turns: &[i32]) -> Executio
             actual_action: actual,
             matches,
             evidence: ev,
+            alt_candidate,
         });
     }
 
@@ -360,6 +381,8 @@ mod tests {
             feeling_stock: vec![],
             super_ramen: -1,
             is_ill: ill,
+            is_qiezhe: false,
+            is_xiao_qie: false,
             race_count: race,
             absent_persons: vec![],
         }
@@ -455,6 +478,41 @@ mod tests {
         assert_eq!(r.matched, 5);
         assert_eq!(r.findings.len(), 2);
         assert!(r.findings.iter().all(|f| f.kind == "execution_mismatch"));
+    }
+
+    /// 偏离一选 → 对应候选标注：实际动作命中 #2/#3 时给出编号（用户口径：偏离主要是选了 2-3 选）
+    #[test]
+    fn test_alt_candidate_annotation() {
+        let tl = vec![
+            // t5 速 100 → t6 力 +30（力训练），建议为速训练（一选）
+            tl_row(5, 0, [100, 100, 100, 100, 100], 80, 4, 0, 0, false),
+            tl_row(6, 0, [100, 100, 130, 100, 100], 60, 4, 0, 0, false),
+            // t7 智 100 → t8 智 +32（智训练），建议为速训练，候选表无智训练
+            tl_row(7, 0, [100, 100, 130, 100, 100], 70, 4, 0, 0, false),
+            tl_row(8, 0, [100, 100, 130, 100, 132], 60, 4, 0, 0, false),
+        ];
+        let mut with_alt = dec_row(5, 0, "速训练");
+        with_alt.candidates = vec![
+            crate::decisions::Cand { rank: 1, desc: "速训练".to_string(), score: None, n: None, gap_to_best: None },
+            crate::decisions::Cand { rank: 2, desc: "力训练".to_string(), score: None, n: None, gap_to_best: None },
+            crate::decisions::Cand { rank: 3, desc: "耐训练".to_string(), score: None, n: None, gap_to_best: None },
+        ];
+        let mut no_alt = dec_row(7, 0, "速训练");
+        no_alt.candidates = vec![
+            crate::decisions::Cand { rank: 1, desc: "速训练".to_string(), score: None, n: None, gap_to_best: None },
+            crate::decisions::Cand { rank: 2, desc: "耐训练".to_string(), score: None, n: None, gap_to_best: None },
+        ];
+        let r = build(&tl, &[with_alt, no_alt], &[]);
+        for row in &r.rows {
+            println!("turn={} ai={} actual={} alt={:?}", row.turn, row.ai_choice, row.actual_action, row.alt_candidate);
+        }
+        assert_eq!(r.rows[0].matches, Some(false));
+        assert_eq!(r.rows[0].alt_candidate.as_deref(), Some("#2 力训练"), "实际力训练命中候选 #2");
+        assert_eq!(r.rows[1].matches, Some(false));
+        assert_eq!(r.rows[1].alt_candidate, None, "候选表无智训练 → 不标注");
+        // finding 证据带候选编号
+        assert!(r.findings[0].evidence.contains("（对应候选 #2 力训练）"));
+        assert!(!r.findings[1].evidence.contains("对应候选"));
     }
 
     /// 锚点规则：同回合多条 train 行取最后一条（RamenSelect 初判 → Train 最终）

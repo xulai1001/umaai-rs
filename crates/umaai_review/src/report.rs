@@ -593,6 +593,7 @@ mod tests {
             actual_action: "速训练".into(),
             matches: Some(true),
             evidence: Default::default(),
+            alt_candidate: None,
         }];
         Digest {
             meta: Meta {
@@ -609,6 +610,8 @@ mod tests {
                 final_score: Some(62500),
                 rank: Some("UA9".into()),
                 final_source: "last_snapshot".into(),
+                is_qiezhe: false,
+                is_xiao_qie: false,
             },
             timeline: tl,
             decisions: dec,
@@ -627,6 +630,33 @@ mod tests {
             schedule: Schedule::default(),
             inherit: None,
             clones: None,
+            training: crate::profile::TrainingProfile {
+                years: vec![
+                    crate::profile::YearProfile {
+                        label: "第1年".into(),
+                        train_counts: [3, 1, 0, 0, 2],
+                        gains: [500, 400, 300, 300, 600]
+                    },
+                    crate::profile::YearProfile {
+                        label: "第2年".into(),
+                        train_counts: [5, 6, 1, 0, 3],
+                        gains: [690, 800, 441, 372, 580]
+                    },
+                    crate::profile::YearProfile {
+                        label: "第3年".into(),
+                        train_counts: [9, 4, 2, 0, 4],
+                        gains: [901, 420, 589, 391, 407]
+                    },
+                    crate::profile::YearProfile {
+                        label: "超拉期".into(),
+                        train_counts: [4, 1, 1, 0, 0],
+                        gains: [127, 74, 189, 60, 30]
+                    }
+                ],
+                luck_by_attr: [1500.0, 400.0, 300.0, 0.0, 200.0],
+                luck_other: 344.0,
+                luck_program: 0.0
+            },
             coverage: Default::default(),
             findings: vec![Finding {
                 kind: "mandatory_race_not_won".into(),
@@ -666,6 +696,8 @@ mod tests {
             feeling_stock: vec![],
             super_ramen: 1,
             is_ill: false,
+            is_qiezhe: false,
+            is_xiao_qie: false,
             race_count: 10,
             absent_persons: vec![],
         }

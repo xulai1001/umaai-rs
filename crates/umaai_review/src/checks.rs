@@ -378,7 +378,7 @@ pub fn bad_habits(
                 file: None,
                 evidence: format!(
                     "干劲 {prev}→{cur} 后 {MOTIVATION_WINDOW} 回合内既无出行/休息恢复动作、\
-                     干劲也未回升（§6.8：AI 认为后续支援卡事件会把心情补回来，不主动恢复）"
+                     干劲也未回升（AI 认为后续支援卡事件会把心情补回来，不主动恢复）"
                 ),
                 severity: "warn".to_string()
             });
@@ -446,6 +446,8 @@ mod tests {
             feeling_stock: vec![],
             super_ramen: -1,
             is_ill: false,
+            is_qiezhe: false,
+            is_xiao_qie: false,
             race_count: 0,
             absent_persons: vec![]
         }
@@ -534,7 +536,8 @@ mod tests {
                     scenario_pt_delta: 0,
                     feeling_stock_len_delta: 1,
                     super_ramen_delta: 0
-                }
+                },
+                alt_candidate: None
             }],
             findings: vec![],
             comparable: 1,

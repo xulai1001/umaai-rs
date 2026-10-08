@@ -20,6 +20,7 @@
 //! - [`checks`]：检查项引擎——伪波动标记 / 超级拉面期 / 坏手法 findings（§6.1、§6.6、§6.7）
 //! - [`inherit`]：继承质量分析（§7）
 //! - [`clones`]：分身彩圈观测，A/B 两类分开统计（§6.5）
+//! - [`profile`]：训练画像——逐年训练次数 × 五维净增 × 运气归属（增长顺序分析）
 //! - [`report`]：report.html 渲染——minijinja 外置模板 + `plot::svg` 四图（§8、§11 步骤 7）
 //! - 待实施：SKILL.md（步骤 8）、端到端验证与发布打包（步骤 9-10）
 //!
@@ -35,6 +36,7 @@ pub mod execution;
 pub mod gdata;
 pub mod inherit;
 pub mod pack;
+pub mod profile;
 pub mod report;
 pub mod schedule;
 pub mod score;

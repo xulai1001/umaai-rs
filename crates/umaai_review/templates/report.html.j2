@@ -75,7 +75,23 @@
 
 {% if narrative.overview %}{{ narrative.overview | safe }}{% else %}<!-- NARRATIVE:overview -->{% endif %}
 
-<section><details open><summary>图1 · 属性成长曲线</summary>{{ chart_status | safe }}</details></section>
+<section><details open><summary>图1 · 属性成长曲线</summary>{{ chart_status | safe }}
+<table>
+  <tr><th>年段</th><th>训练次数（速/耐/力/根/智）</th><th>五维净增（速/耐/力/根/智）</th></tr>
+  {% for y in digest.training.years %}
+  <tr><td>{{ y.label }}</td><td class="num">{{ y.train_counts | join(" / ") }}</td>
+      <td class="num">{% for g in y.gains %}{{ "+" if g >= 0 else "" }}{{ g }}{% if not loop.last %} / {% endif %}{% endfor %}</td></tr>
+  {% endfor %}
+</table>
+<div class="note">训练 = 推断实际动作计数；净增 = 年段差分（含事件 / 继承 / 比赛奖励）。运气归属（回合合计 Δ 计入当回合训练维；自选 swing 与学技能回合已剔除归程序性大波动）：
+  速 {{ digest.training.luck_by_attr[0] | round | int }} /
+  耐 {{ digest.training.luck_by_attr[1] | round | int }} /
+  力 {{ digest.training.luck_by_attr[2] | round | int }} /
+  根 {{ digest.training.luck_by_attr[3] | round | int }} /
+  智 {{ digest.training.luck_by_attr[4] | round | int }}，
+  非训练回合 {{ digest.training.luck_other | round | int }}，
+  程序性大波动回合 {{ digest.training.luck_program | round | int }}。</div>
+</details></section>
 <section><details open><summary>图2 · 运气分双轴</summary>{{ chart_luck | safe }}</details></section>
 
 {% if narrative.luck_trend %}{{ narrative.luck_trend | safe }}{% else %}<!-- NARRATIVE:luck_trend -->{% endif %}
@@ -140,9 +156,8 @@
 <details open>
 <summary>口径速览</summary>
 <footer>
-  <div>· 评分 = 五维加权 + PT 折算：略低于小黑板实际分数，未计「努力家」等新状态</div>
-  <div>· 运气分 = 期望终局分累计变化：支援卡事件进度未统计，系统性略低于实际运气，&lt; -2000 才判「运气差」</div>
-  <div>· 年界 / 继承 / RMJ / 开局地区选择为程序性波动回合，读数降级</div>
+  <div>· 评分 = AI 端按实际终局五维 + 技能点折算的估算（含切者/小切 PT 加成）：略高于小黑板与实际分数，不含已学技能分</div>
+  <div>· 运气分 = 期望终局分累计变化：年界 / 继承 / RMJ / 开局地区选择已作位置标记（跨年假跳基本消除，按性质归因）；&lt; -2000 才判「运气差」（录制年代注记见 digest.context.criteria）</div>
   <div>· 完整判据与赛程 / 覆盖数据块见 digest.json（context / schedule / coverage）；逐条决策见 decisions.csv</div>
 </footer>
 </details>

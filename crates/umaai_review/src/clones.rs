@@ -387,7 +387,8 @@ mod tests {
                 // 继承窗口的 actual_action 带「·继承混合」后缀（matches 不参与一致率）
                 actual_action: "耐训练·继承混合".to_string(),
                 matches: None,
-                evidence: Default::default()
+                evidence: Default::default(),
+                alt_candidate: None
             }],
             ..Default::default()
         };

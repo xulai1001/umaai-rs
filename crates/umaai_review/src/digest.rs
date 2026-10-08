@@ -28,6 +28,8 @@ pub struct Digest {
     /// 分身彩圈观测（§6.5；gamedata 缺失时缺席）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clones: Option<crate::clones::ClonesBlock>,
+    /// 训练画像（逐年训练次数 × 五维净增 × 运气归属；增长顺序分析用）
+    pub training: crate::profile::TrainingProfile,
     pub coverage: crate::decisions::Coverage,
     pub findings: Vec<crate::execution::Finding>,
     pub context: DigestContext,
@@ -51,6 +53,10 @@ pub struct Meta {
     /// 终局评分数据来源：`final_frame`（真机终局帧）/ `last_snapshot`（末快照估算，
     /// 缺结局事件 ≈ -2700）/ `unavailable`
     pub final_source: String,
+    /// 末快照携带的切者（能人，状态 7）标志：终局评分 PT 项 ×1.1 已计入
+    pub is_qiezhe: bool,
+    /// 末快照携带的小切（勤勉好学，状态 40）标志：PT 项 ×1.04 已计入
+    pub is_xiao_qie: bool,
 }
 
 /// 卡组条目（card_id = 协议 idrank = cardId×10 + 突破等级）
@@ -91,6 +97,8 @@ pub struct Inputs<'a> {
     pub inherit: Option<crate::inherit::InheritBlock>,
     /// 分身彩圈观测块（§6.5）
     pub clones: Option<crate::clones::ClonesBlock>,
+    /// 训练画像（逐年训练次数 × 五维净增 × 运气归属；2026-10-07 用户拍板）
+    pub training: crate::profile::TrainingProfile,
     /// 检查项 findings（§6.1 / §6.6）
     pub extra_findings: Vec<crate::execution::Finding>,
     /// 自带 gamedata 的版本注记（`Some` = 用的是 skill 携带的旧版数据）
@@ -145,6 +153,10 @@ pub fn build(inputs: &Inputs) -> Digest {
     // 优先用**真机终局帧**（`game{id}_final.json`，育成结束·点技能前，含全部结局
     // 事件）——它是本局终局数据的唯一真机来源；缺失时回落到末份快照估算（缺结局
     // 事件，约 -2700，口径见 context.criteria）。gamedata 缺失 → None + 注记。
+    //
+    // 切者（能人，状态 7）×1.1 / 小切（勤勉好学，状态 40）×1.04 的 PT 项加成
+    // （2026-10-01 起 `calc_score` 生效）：终局帧不带该标志，从末份快照的
+    // `isQieZhe` / `isXiaoQie` 代入（快照缺失时按无状态计）。
     let final_frame = pack
         .final_raw
         .as_deref()
@@ -160,9 +172,13 @@ pub fn build(inputs: &Inputs) -> Digest {
         }
         ok
     });
+    let (is_qiezhe, is_xiao_qie) = tl
+        .last_status
+        .as_ref()
+        .map_or((false, false), |s| (s.base_game.is_qiezhe, s.base_game.is_xiao_qie));
     let (final_score, rank, final_source) = match (&final_frame, inputs.gamedata_ok) {
         (Some(frame), true) => {
-            let score = crate::score::final_score_from_frame(frame);
+            let score = crate::score::final_score_from_frame(frame, is_qiezhe, is_xiao_qie);
             (Some(score), Some(crate::score::rank_name(score)), "final_frame")
         }
         (None, true) => match tl.last_status.as_ref().map(|s| &s.base_game) {
@@ -193,6 +209,8 @@ pub fn build(inputs: &Inputs) -> Digest {
         final_score,
         rank,
         final_source: final_source.to_string(),
+        is_qiezhe,
+        is_xiao_qie,
     };
 
     // —— context ——
@@ -206,28 +224,33 @@ pub fn build(inputs: &Inputs) -> Digest {
         "YEAR_BOUNDARIES=[24,48,72]（剧本年份边界，代码常量）".to_string(),
         "INHERIT_TURNS=[30,54]（两次继承回合，代码常量）".to_string(),
         "SUPER_RAMEN_TURNS=turn>=72（超级拉面期；实测分身自 72 起）".to_string(),
-        "运气分读法（已知 bug 与固定波动区都会影响读数）：① 已知 bug——RMJ 结算时机\
-         可能与实际数据不符（年界附近运气虚高）；支援卡连续事件进度未统计（模拟高估\
-         好事件，整条曲线被系统性压低）→ total_luck_end 略低于实际运气，< -2000（≈\
-         方差量级估计）才判「这局运气差」；② 固定波动区——年界 / 继承 / RMJ / 开局\
-         2-3 回合第 1 年地区选择（选择带来的期望跳变，小赚或小亏均为程序性），\
-         这些位置一增一减配对出现或为选择本身导致，读运气分时降级或跳过，\
-         不要当真实损益".to_string(),
+        "运气分读法：① 残余已知偏差——RMJ 结算结果按『每年成功』假设补齐（真机若\
+         实际失败，该年起期望整体偏高）；② 位置标记（检测保留）——年界 / 继承 /\
+         RMJ / 开局 2-3 回合第 1 年地区选择：跨年假跳 2026-10 修复后已基本消除，\
+         这些位置如今的跳变基本是真实结算 / 继承落地 / 选择本身带来的期望变化，\
+         标记用于识别性质，归因时说明性质、不当连续损益读，仅再出现一增一减配对\
+         式大幅账面波动时才降级；③ 获得切者（能人）的回合 T(n) 有 PT 项 ×1.1 量级\
+         的期望跳升（2026-10-01 起计入评分，timeline.is_qiezhe 由 false→true 的回合\
+         即获得回合）——属真实好运，不当程序性波动读；④「这局运气差」判读阈值\
+         < -2000（≈方差量级，保守线）".to_string(),
         format!(
-            "final_score 口径 = Uma::calc_score；数据来源 = {}。\
-             final_frame：育成结束·点技能前的真机终局帧（含全部结局事件与末回合比赛奖励，\
-             即 AI 评估轴的真机终局状态）；last_snapshot：末份快照估算，**缺结局事件**\
-             （育成结束 401407 / 通用 5011 / 友人结束 ≈ -2700），读分时按偏低理解。\
-             两种来源都未计入「努力家」等新状态，也不含已学技能分与 Hint 折算",
+            "final_score 口径 = AI 端按**实际终局五维与技能点**的估算（Uma::calc_score：\
+             五维查表 + PT 折算 + Hint 折算 + 切者/小切 PT 项加成），**略高于小黑板与\
+             实际分数**（PT 折算高于实际买技能的得分）；数据来源 = {}。final_frame：\
+             育成结束·点技能前的真机终局帧（含全部结局事件与末回合比赛奖励，即 AI 评估\
+             轴的真机终局状态；帧内无切者/小切标志，按末快照 isQieZhe/isXiaoQie 代入）；\
+             last_snapshot：末份快照估算，**缺结局事件**（育成结束 401407 / 通用 5011 /\
+             友人结束 ≈ -2700），相对再偏低。两种来源都不含已学技能分（skillScore 恒 0）",
             match final_source {
                 "final_frame" => "final_frame（真机终局帧）",
                 "last_snapshot" => "last_snapshot（末快照估算，偏低）",
                 _ => "unavailable（gamedata 缺失）"
             }
         ),
-        "flagged_turns = 程序性波动标记（年界前2至后1回合 / 继承回合 / RMJ 结算 / 开局\
-         2-3 回合第 1 年地区选择），归因时降级或跳过；turn 72 双属性：既标记为年界\
-         波动、也算进超级拉面期统计（该回合份量实打实，正跳不是纯程序性回吐）"
+        "flagged_turns = 位置标记（年界前2至后1回合 / 继承回合 / RMJ 结算 / 开局\
+         2-3 回合第 1 年地区选择；检测保留——跨年假跳已基本消除，按性质归因）；\
+         turn 72 双属性：既标记为年界、也算进超级拉面期统计（该回合份量实打实，\
+         正跳不是纯程序性回吐）"
             .to_string(),
         "检查项覆盖：已验证判据（目标赛未跑赢 / 关键资源过早耗尽 / 心情掉落未恢复）直接产\
          findings；训练失败出候选清单（info，人工复核）；其余判据（体力健康 / 吃面节奏 / 友人\
@@ -242,6 +265,47 @@ pub fn build(inputs: &Inputs) -> Digest {
          decisions 完成——注意 turn_delta 是「局面期望终局分」变化，不等于本回合属性增量"
             .to_string()
     ];
+    // —— 录制年代注记（按局包内容自动判定；旧口径 bug 只影响旧局包）——
+    // ① keyEvents：2026-10-01 起协议导入把小黑板 keyEvents 归一到模拟事件历史，
+    //    支援卡连续事件进度未统计的系统性压低自此修复——旧局包仍带该偏差。
+    //    判定用「任一快照非空」（tl.key_events_seen）：末快照可能是收尾空帧
+    //    （game6263 实测末帧空而前 142 份非空），turn 0 也天然为空。
+    if !tl.key_events_seen {
+        criteria.push(
+            "本局快照未携带 keyEvents（2026-10-01 前录制 / 旧插件 / 中途接入）：支援卡连续\
+             事件进度未对齐，整条运气曲线系统性略偏低（该偏差 2026-10-01 已修复，仅影响\
+             旧局包），total_luck_end 按偏低读"
+                .to_string()
+        );
+    }
+    // ② turn 2 假跳：2026-10-03 修复链式推进漏加 NPC（选区前期望偏低约 1400 →
+    //    turn 2 出现 +1300 量级假跳）
+    let turn_delta_sum = |turn: u32| {
+        dec.rows
+            .iter()
+            .filter(|r| r.turn == turn)
+            .filter_map(|r| r.turn_delta)
+            .sum::<f64>()
+    };
+    let t2 = turn_delta_sum(2);
+    if t2 >= 1000.0 {
+        criteria.push(format!(
+            "turn 2 回合合计 Δ = {t2:+.0}，疑似 2026-10-03 前录制：开局链式推进漏加 NPC 使\
+             「选区前」期望偏低约 1400，turn 2 出现 +1300 量级假跳（已修复，仅影响旧局包），\
+             该跳变按程序性波动降级"
+        ));
+    }
+    // ③ turn 72 假跳：2026-10-07 修复 URA 段比赛收益低估（turn 72 一次性赛后加成
+    //    race_bonus +100 在重放路径丢失 → 71→72 有 −1000 量级程序性假跳，修复后
+    //    收敛至 −388 量级）
+    let t72 = turn_delta_sum(72);
+    if t72 <= -800.0 {
+        criteria.push(format!(
+            "turn 72 回合合计 Δ = {t72:+.0}，疑似 2026-10-07 前录制：URA 段一次性赛后加成\
+             在重放路径丢失，turn 71→72 有 −1000 量级程序性假跳（已修复，仅影响旧局包，\
+             修复后收敛至 −388 量级），该跳变按程序性波动降级"
+        ));
+    }
     if !inputs.gamedata_ok {
         criteria.push("gamedata 缺失：uma/卡名、地区名、赛程、终局评分与等级均已降级（纯 ID）".to_string());
     }
@@ -292,6 +356,7 @@ pub fn build(inputs: &Inputs) -> Digest {
         schedule: inputs.schedule.clone(),
         inherit: inputs.inherit.clone(),
         clones: inputs.clones.clone(),
+        training: inputs.training.clone(),
         coverage,
         findings,
         context,
@@ -408,6 +473,7 @@ mod tests {
             flags: vec![],
             inherit: None,
             clones: None,
+            training: Default::default(),
             extra_findings: vec![],
             gamedata_bundled: None,
         };
@@ -437,6 +503,119 @@ mod tests {
         assert_eq!(v["findings"].as_array().unwrap().len(), 0);
         let _ = fs::remove_dir_all(&out);
         Ok(())
+    }
+
+    /// 录制年代注记（按局包内容自动判定）：旧局包出注记、新局包不出
+    #[test]
+    fn test_recording_vintage_notes() {
+        // 快照：A 局不带 keyEvents（旧录制）；B 局带 keyEvents（2026-10-01 后）
+        let snap_json = |turn: u32, key_events: &str| {
+            format!(
+                r#"{{
+            "baseGame": {{
+                "scenarioId": 14, "umaId": 112402, "umaStar": 5, "turn": {turn},
+                "vital": 80, "maxVital": 100, "motivation": 4,
+                "fiveStatus": [100, 200, 300, 400, 500],
+                "fiveStatusLimit": [1200, 1200, 1200, 1200, 1200],
+                "skillPt": 10, "skillScore": 0, "totalHints": 5,
+                "trainLevelCount": [1, 2, 3, 4, 5],
+                "ptScoreRate": 2.0, "failureRateBias": 0,
+                "isIll": false, "isQieZhe": false, "isAiJiao": false,
+                "isXiaoQie": false, "PositiveThinkingCount": 0, "isRefreshMind": false, "LuckyCount": 0,
+                "zhongMaBlueCount": [0, 0, 0, 0, 0], "isRacing": false,
+                "cardId": [302424],
+                "persons": [], "personDistribution": [[], [], [], [], []],
+                "lockedTrainingId": -1,
+                "friendship_noncard_yayoi": 0, "friendship_noncard_reporter": 0,
+                "friend_stage": 0, "friend_outgoingUsed": 0,
+                "playing_state": 1, "raceHistory": [], "story": null,
+                "keyEvents": {key_events},
+                "source": "command"
+            }},
+            "ramen": {{}}
+        }}"#
+            )
+        };
+        let row = |turn: u32, delta: Option<f64>| crate::decisions::DecRow {
+            file: format!("f{turn}.json"),
+            turn,
+            seq: 0,
+            stage: "Train".to_string(),
+            decision_kind: "train".to_string(),
+            candidates: vec![],
+            chosen: Default::default(),
+            t_n_raw: None,
+            t_n_display: None,
+            total_luck: None,
+            turn_delta: delta,
+            chain_len: 1,
+            outcome: "calc".to_string(),
+            reason: String::new(),
+            step: 0,
+        };
+        let build_digest = |snaps_spec: Vec<(u32, &str)>, rows: Vec<crate::decisions::DecRow>| {
+            let snaps: Vec<crate::pack::SnapEntry> = snaps_spec
+                .iter()
+                .map(|&(turn, key_events)| crate::pack::SnapEntry {
+                    file: format!("game1_turn{turn}.json"),
+                    game: 1,
+                    turn,
+                    seq: 0,
+                    bytes: snap_json(turn, key_events).into_bytes(),
+                })
+                .collect();
+            let tl = timeline::build(&snaps);
+            let dec = decisions::DecisionsResult { rows, ..Default::default() };
+            let exec = crate::execution::build(&tl.rows, &dec.rows, &[]);
+            build(&Inputs {
+                pack: &Pack {
+                    game: 1,
+                    snaps,
+                    unparsed: vec![],
+                    decisions_csv: None,
+                    meta: None,
+                    luck_trend_svg: None,
+                    final_raw: None,
+                    ignored: vec![],
+                },
+                timeline: &tl,
+                decisions: &dec,
+                execution: exec,
+                schedule: Schedule::default(),
+                gamedata_ok: false,
+                flags: vec![],
+                inherit: None,
+                clones: None,
+                training: Default::default(),
+                extra_findings: vec![],
+                gamedata_bundled: None,
+            })
+        };
+
+        // A：旧局包——无 keyEvents + turn2 假跳 + turn72 假跳 → 3 条注记齐出
+        let a = build_digest(vec![(77, "[]")], vec![row(2, Some(1500.0)), row(72, Some(-1083.0))]);
+        println!("旧局包 criteria:\n{}", a.context.criteria.join("\n"));
+        let has_a = |kw: &str| a.context.criteria.iter().any(|c| c.contains(kw));
+        assert!(has_a("keyEvents"), "无 keyEvents → 连续事件偏差注记");
+        assert!(has_a("turn 2 回合合计"), "turn2 Δ≥+1000 → 假跳注记");
+        assert!(has_a("turn 72 回合合计"), "turn72 Δ≤-800 → 假跳注记");
+
+        // B：新局包——keyEvents 在场、跳变幅度正常 → 3 条注记都不出
+        let b = build_digest(vec![(77, "[830297001]")], vec![row(2, Some(300.0)), row(72, Some(-388.0))]);
+        println!("新局包 criteria 数 = {}", b.context.criteria.len());
+        let has_b = |kw: &str| b.context.criteria.iter().any(|c| c.contains(kw));
+        assert!(!has_b("keyEvents"), "keyEvents 在场 → 不出连续事件偏差注记");
+        assert!(!has_b("turn 2 回合合计") && !has_b("turn 72 回合合计"), "无大跳 → 不出假跳注记");
+
+        // C：末快照 keyEvents 为空、前份非空（game6263 实测形态：末帧收尾空帧）
+        //    → 判定用「任一非空」，不出注记
+        let c = build_digest(
+            vec![(5, "[830297001]"), (77, "[]")],
+            vec![row(2, Some(300.0))]
+        );
+        let has_c = |kw: &str| c.context.criteria.iter().any(|c| c.contains(kw));
+        println!("末帧空 keyEvents 局 criteria 数 = {}", c.context.criteria.len());
+        assert!(!has_c("keyEvents"), "任一快照有 keyEvents → 不出注记（末帧空是收尾特例）");
     }
 
     /// 终局评分来源分流：真机终局帧优先（含结局事件），缺失回落末快照
@@ -509,6 +688,7 @@ mod tests {
                 flags: vec![],
                 inherit: None,
                 clones: None,
+                training: Default::default(),
                 extra_findings: vec![],
                 gamedata_bundled: None,
             })
