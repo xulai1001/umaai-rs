@@ -64,9 +64,9 @@
 例如，`region_feeling = [2, 2, 1]`, 表示消耗2个A，2个B，1个C=1拉面。
 `隐藏风味`可以**替代任意普通诀窍点**；每次做面时可以使用0-2个`隐藏风味`。
 做面后，仅在当回合内享受拉面提供的加成效果。加成效果为：基础效果`ramen_basic_effect`和地区效果`ramen_region_effect`的和.
-**PT 增量/eat_count 延后到 NextTurn 阶段**：`ground_ramen_effects`（SpecialSelect→Train 过渡时触发）只设 `current_ramen` / 消耗诀窍 / 生成分身 / 羁绊效果，不立即累加 `scenario_pt` 也不 `eat_count += 1`——这两步统一在 `Game::next()` 的 `NextTurn` 阶段（清空 `current_ramen` 之前）做。这样训练阶段的 `calc_ramen_training_effect` 读到的是「吃面前」的 `scenario_pt`，`ramen_pt_effect` / `region_bonus` 档位不会因本次吃面立即跨档抬升；PT 增量的档位收益从下一回合才参与计算。RMJ 归档与 `check_rmj` 看到的是吃面后 PT，行为不变。
+**PT 增量 / eat_count 在吃面当刻入账**：`ground_ramen_effects`（SpecialSelect→Train 过渡时触发）设 `current_ramen`、消耗诀窍、生成分身、羁绊效果，并**立即**累加 `scenario_pt` 与 `eat_count += 1`。因此训练阶段的 `calc_ramen_training_effect` 读到的是「吃面后」的 `scenario_pt`，`ramen_pt_effect` / `region_bonus` 档位按本次吃面后的累计值取。`Game::next()` 的 `NextTurn` 阶段不再累加（避免重复入账）。
 
-> **显示层 vs 结算层（2026-10-07 补充）**：游戏内是「先按前一档算效果数值，再增加并显示地区面板」——面板 / `active_effect_array` 显示的是**吃面后**档位（含本次吃面新增 PT），但公式（结算层）用的是**吃面前** PT。因此 `umaai` 从协议快照（协议 `scenario_pt` 为吃面后值）重建局面时需回退到吃面前 PT（`into_game` 内 `restore_pre_eat_pt`），与引擎语义对齐；面板值看着像吃面后，属显示层与公式不同步。
+> **实机口径（2026-10-07 定稿）**：协议帧的 `scenario_pt` 即**吃面后**当年累计值，实机训练用的就是它——对拍 `logs/game6261` turn47_2→47_3：本回合吃面 +600 后 `scenario_pt` 从 5400 涨到 6000，档位立刻按新值生效。因此 `umaai` 重放直接透传 `scenario_pt`，不做反推。（曾短暂采用「按吃面前 PT」的方案，经实机对拍证伪后回退。）
 
 ### 剧本点数（ramen_pt）
 剧本点数影响剧本的`全局加成`，初始为0，每次做面都会增加剧本点数。
@@ -109,7 +109,7 @@
 
 > 口径校准（2026-10-07，game6261 第3年 `active_effect_array` 反推）：`pt=500→0 / 1650→3 / 2300→5 / 3000→7`，即按 **1000 点一档**（旧述「每300点」有误）。
 > 另注：面板/`active_effect_array` 会把 `region_bonus` 同时加到 `youqing` 与 `pt_bonus`，但**属性与 PT 的上层公式使用的 pt_bonus 只取 region 基础值（不含 region_bonus）**；`youqing` 则含 region_bonus。
-> 且 **PT 口径（2026-10-07 定稿，M2）**：友情加成正常情况下**同时作用于属性与 PT**，PT 上层公式**不剔除** RMJ 结算的友情（推翻早前 M1「RMJ 友情只作用于属性」的方案）。另：吃面回合的 `ramen_pt_effect` / `region_bonus` 档位按**吃面前** `scenario_pt` 取（见「拉面（做面/吃面）」节的显示层说明）。
+> 且 **PT 口径（2026-10-07 定稿）**：友情加成对**属性**用完整值；对 **PT** 则**剔除 RMJ 结算**的那部分友情（`ramen_success_effect` / `ramen_fail_effect` 的 `youqing`，代码用 `youqing - rmj_youqing`）。吃面回合的 `ramen_pt_effect` / `region_bonus` 档位按**吃面后** `scenario_pt` 取（见「拉面（做面/吃面）」节的实机口径说明）。
 
 ### 超级拉面(super_ramen)
 在URA回合（回合72-77），每回合自动享受超级拉面效果，记录在`finals_effect`中
@@ -291,14 +291,14 @@ ramen_memo里记录的典型的分配结果为：（左-总消耗，右-分配�
 ### 剧本加成
 - 生效范围：ramen_pt_effect 常驻生效（**超级拉面期间不生效**）；ramen_basic_effect, ramen_region_effect 仅在**吃面后**，在 at_trains 标注的训练位置生效，不吃面时不生效
 - 训练加成 xunlian: ramen_pt_effect, ramen_basic_effect, ramen_region_effect, 求和（超级拉面期间恒为 0）
-- 友情加成 youqing: 来自 ramen_success_effect / ramen_fail_effect, ramen_basic_effect, ramen_region_effect 求和。仅在友情训练时生效，非友情训练时 youqing=0（超级拉面期间只来自 ramen_success/fail_effect + finals_effect.base）
+- 友情加成 youqing: 来自 ramen_success_effect / ramen_fail_effect, ramen_basic_effect, ramen_region_effect 求和。仅在友情训练时生效，非友情训练时 youqing=0（超级拉面期间只来自 ramen_success/fail_effect + finals_effect.base）。其中来自 `ramen_success_effect / ramen_fail_effect`（RMJ 结算）的部分另计为 `rmj_youqing`——**属性上层用完整 youqing，PT 上层用 `youqing - rmj_youqing`（剔除 RMJ 友情）**
 - PT加成 pt_bonus：来自 ramen_region_effect（超级拉面期间来自 finals_effect.extra）
 - 上层数值上限加成（**属性与 PT 各自结算；普通回合两者同值，超级拉面两者来源不同**）：
   - 属性上段上限 = `100 + status_limit`：普通回合来自 `ramen_basic_effect.status_limit`（Y2 +20 / Y3 +40），超级拉面来自选项（training_limit_options）的「獲得上限+100」
   - PT 上段上限 = `100 + pt_limit`：普通回合来自 `ramen_basic_effect.status_limit`（「獲得上限アップ」对属性/PT 同值生效），超级拉面来自 `finals_effect.extra` 的「SP獲得上限+100」
   - 超级拉面期间：属性上限走选项、PT 上限走 extra，两者各 +100，互不叠加
 - 属性训练上层数值 training_value_ramen = lower_value * (100 + xunlian)/100.0 * (100+youqing)/100.0
-- PT训练上层数值 training_value_ramen = lower_value * (100+xunlian)/100.0 * (100+youqing)/100.0 * (100+pt_bonus)/100.0
+- PT训练上层数值 training_value_ramen = lower_value * (100+xunlian)/100.0 * (100+youqing-rmj_youqing)/100.0 * (100+pt_bonus)/100.0
 - Hint出现率：在分配人物时计算，不参与训练数值计算。基础值为 7.5%,随剧本Buff增加，例如+30就是 7.5* (1+30%)=9.75%
 - Hint率 = base_hint_rate * (100 + card_hint_bonus) / 100 * (1 + scenario_hint_bonus / 100)
 - scenario_hint_bonus = ramen_pt_effect.hint + ramen_success/fail_effect.hint

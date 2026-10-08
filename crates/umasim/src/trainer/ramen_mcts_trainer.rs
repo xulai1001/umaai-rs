@@ -1432,37 +1432,19 @@ mod tests {
         );
         let mut c = Checks::new();
         c.check(game.turn() == 77, "跑满 77 回合");
-        // 2026-08-25 更新：不在判定与得意率解耦 + 地区分身缺席优先，模拟数值变化，基准重抓
-        // 2026-08-27 更新（两次叠加）：
-        // (1) 五维上限剧本化，速度上限 2958→3337，整局数值变化；
-        // (2) fallback 与 rollout 均切到 RecommendedRamenTrainer。
-        //     ⚠ gate-off **不是**纯推荐策略跑局——本测试用 ramen_and_special_stages()，
-        //     ramen/special 两阶段仍在搜（searched_count=66），只是不合并成单动作。
-        //     纯推荐策略的对照在 test_stages_none_matches_recommended（stages=none，
-        //     searched_count=0），同卡组 seed=42 的纯推荐快照见 bench.rs 的 64336。
-        //     别拿这里的 62698 当 REC 基线，会误判搜索掉分幅度。
-        // 上游 (2) 抓的 66705 / [3258,...] 是在 (1) 之前测的，两者叠加后已在本分支重抓。
-        // 2026-09 更新：吃面 PT 增量 / eat_count 延后到 NextTurn，训练阶段用吃面前 PT
-        // 算 ramen_pt_effect / region_bonus 档位，整局数值变化（拉面效果变弱导致整局偏低），
-        // 基准重抓。
-        // 2026-09-18 重抓：上一版数值早于 preset 定稿（本次改动实测逐位不变，仅为同步）。
-        // 2026-09-21 重抓：友人出行跨年配额定档 [0,3,5]（原 [0,2,5]），整局路径变化。
-        // 2026-10-04 重抓：超级拉面效果修正（只保留 RMJ + finals、接入选中选项的
-        // +100 训练上限），URA 训练数值变化，整局路径与终局数值变化。
-        // 2026-10-06 重抓：PT 上段上限口径修正——普通回合 `ramen_basic_effect.status_limit`
-        // 同时抬属性与 PT 上限（Y2 +20 / Y3 +40），吃面回合 PT 上限下降，整局路径与终局数值变化。
-        // 2026-10-06 重抓：五维评分表换用 URA `StatusToPoint`（raw 表 3802 项），
-        // 手写策略的 marginal gain 随之下调，决策路径与终局数值整体变化。
-        // 2026-10-07 重抓：拉面 PT 口径改为 M2——PT 友情**不**剔除 RMJ（友情对属性与 PT 同时生效），
-        // 且吃面回合的效果档位按**吃面前** PT 取。整局路径与终局数值变化。
-        c.check(score == 61472, "评分与改动前逐位相同");
+        // 固定种子整局快照。注意 gate-off **不是**纯推荐策略跑局——本测试用
+        // `ramen_and_special_stages()`，ramen/special 两阶段仍在搜，只是不合并成单动作；
+        // 纯推荐对照见 `test_stages_none_matches_recommended` 与 bench.rs 快照。
+        // 期望值随模拟行为改动整体重抓；历次重抓记录见
+        // `.trae/documents/golden_baselines.md`。
+        c.check(score == 61444, "评分与改动前逐位相同");
         c.check(
-            game.uma.five_status == [3337, 1793, 2196, 936, 1213],
+            game.uma.five_status == [3337, 1868, 2163, 956, 1241],
             "五维与改动前逐位相同"
         );
-        c.check(game.uma.skill_pt == 8002, "技能点与改动前逐位相同");
+        c.check(game.uma.skill_pt == 7965, "技能点与改动前逐位相同");
         c.check(game.ramen.scenario_pt == 0, "剧本 PT 与改动前逐位相同");
-        c.check(searched == 61, "searched_count 与改动前逐位相同");
+        c.check(searched == 56, "searched_count 与改动前逐位相同");
         c.finish()
     }
 
@@ -1564,15 +1546,15 @@ mod tests {
 
     /// 硬性验收 2：合并开启时 SpecialSelect 大多数走缓存命中，少数走搜索
     ///
-    /// 2026-08-27 修订：原断言 `special_searches == 0` 在 fallback 切到 `RecommendedRamenTrainer`
-    /// 后偶发失败——race_turn 时 `RamenSelect` 走非合并搜索路径（缓存写不进去），若 trainer
-    /// 在该回合选了某个 ramen，下一阶段 SpecialSelect 出现时缓存 miss 必须重搜一次。这是
-    /// REC 决策倾向带来的合法新行为，不是缓存检查逻辑问题。
+    /// 断言用逐位快照（`special_calls` / `special_searches`）+ 一条与数字解耦的占比上界。
+    /// 不能用 `special_calls > special_searches` 这类宽松式：调用数与重搜数接近时几乎不设防。
     ///
-    /// 2026-08-28 再修订：上一版把断言改成 `special_calls > special_searches`，实测这局是
-    /// 29 次调用、1 次重搜——该条件下搜 28 次也能绿，等于没有守门。现钉逐位快照
-    /// `special_calls == 29` 与 `special_searches == 1`（与本文件其余快照同口径），
-    /// 占比上界只作第二道网。重抓快照时请一并核对重搜数没有变大。
+    /// 重搜偶发出现的合法性：race_turn 时 `RamenSelect` 走非合并搜索路径（缓存写不进去），
+    /// 若该回合选了某个 ramen，下一阶段 SpecialSelect 缓存 miss 必须重搜一次——这是 REC
+    /// 决策倾向带来的合法行为，不是缓存逻辑问题。
+    ///
+    /// 重抓快照时请一并核对重搜数没有变大。历次重抓记录见
+    /// `.trae/documents/golden_baselines.md`。
     #[test]
     fn test_combined_on_skips_special_search() -> Result<()> {
         let seed = 42;
@@ -1605,24 +1587,8 @@ mod tests {
         c.check(ramen_calls > 0, "RamenSelect 被调用过");
         c.check(ramen_searches > 0, "RamenSelect 走过搜索");
         c.check(special_calls > 0, "SpecialSelect 被调用过（缓存命中路径）");
-        // 2026-08-28 收紧：原断言 `special_calls > special_searches` 在 29 次调用里
-        // 搜 28 次也绿，等于没有守门。合并路径整个失效都抓不住。
-        // 改回本文件通行的逐位快照：29 次调用只有 1 次重搜（第 3 年 race_turn 选面，
-        // `select_action` 的合并短路 `!game.is_race_turn()` 不成立，见本文件 495-547）。
-        // 2026-09 更新：吃面 PT 增量延后到 NextTurn 后，本回合 PT 档位提升延后生效，
-        // 整局搜索路径微小变化，SpecialSelect 调用 / 重搜数基线重抓。
-        // 2026-09-18 重抓：上一版快照早于 preset 定稿（本次改动实测逐位不变，仅为同步）。
-        // 2026-09-21 重抓：友人出行配额定档 [0,3,5]，SpecialSelect 调用 28→29
-        // （重搜仍为 0，语义上界断言不变）。
-        // 2026-10-04 重抓：超级拉面效果修正（RMJ + finals、选中选项 +100 上限），
-        // 整局搜索路径变化，SpecialSelect 调用 29、重搜 0。
-        // 2026-10-06 重抓：PT 上段上限口径修正（普通回合 basic.status_limit 同时抬 PT 上限），
-        // 吃面回合 PT 上限下降 → 决策倾向变化，SpecialSelect 调用 29→26、重搜 0→2。
-        // 2026-10-06 重抓：五维评分表换用 URA `StatusToPoint`，决策倾向再变，
-        // SpecialSelect 调用 26→27、重搜 2→1。
-        // 2026-10-07 重抓：拉面 PT 口径改为 M2（PT 友情不剔 RMJ + 吃面按吃面前 PT），
-        // 决策倾向再变，SpecialSelect 调用 27→30、重搜 1→0。
-        c.check(special_calls == 30, "SpecialSelect 调用数与改动前逐位相同");
+        // 逐位快照：历次重抓记录见 `.trae/documents/golden_baselines.md`。
+        c.check(special_calls == 28, "SpecialSelect 调用数与改动前逐位相同");
         c.check(special_searches == 0, "SpecialSelect 重搜数与改动前逐位相同");
         // 再留一条与具体数字解耦的语义上界，防止将来重抓快照时把比例抬上去
         c.check(

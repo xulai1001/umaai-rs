@@ -17,11 +17,15 @@ const SUPER_RAMEN_STATUS_LIMIT: i32 = 100;
 pub struct RamenTrainingEffect {
     /// 训练加成（百分比）
     pub xunlian: i32,
-    /// 友情训练加成（百分比，仅友情训练时生效）——对**属性与 PT** 上层均生效
+    /// 友情训练加成（百分比，仅友情训练时生效）——对**属性**上层生效
     ///
-    /// 口径（2026-10-07 定稿）：友情加成正常情况下同时对属性与 PT 生效，
-    /// **不剔除** RMJ 结算的友情（推翻早前 M1「RMJ 友情只作用于属性」的方案）。
+    /// PT 上层另见 `rmj_youqing`：实机 PT 不吃 RMJ 结算的那部分友情。
     pub youqing: i32,
+    /// 其中来自 RMJ 结算的友情（`ramen_success_effect` / `ramen_fail_effect`）
+    ///
+    /// 实机实测：PT 上层**不**吃这份友情，故 PT 乘子用 `youqing - rmj_youqing`；
+    /// 属性上层仍用完整 `youqing`。
+    pub rmj_youqing: i32,
     /// PT加成（百分比）——仅对 PT 上层生效
     pub pt_bonus: i32,
     /// 属性上限增加
@@ -50,6 +54,7 @@ pub(crate) fn apply_ramen_training_effect(mut status: Array6, effect: &RamenTrai
     }
     let xunlian_mult = (100 + effect.xunlian) as f64 / 100.0;
     let youqing_mult = (100 + effect.youqing) as f64 / 100.0;
+    let pt_youqing_mult = (100 + effect.youqing - effect.rmj_youqing) as f64 / 100.0;
     let pt_bonus_mult = (100 + effect.pt_bonus) as f64 / 100.0;
     let status_limit = 100 + effect.status_limit;
     let pt_limit = 100 + effect.pt_limit;
@@ -60,7 +65,7 @@ pub(crate) fn apply_ramen_training_effect(mut status: Array6, effect: &RamenTrai
             *value += upper;
         }
     }
-    let pt_upper_raw = (status[5] as f64 * xunlian_mult * youqing_mult * pt_bonus_mult) as i32 - status[5];
+    let pt_upper_raw = (status[5] as f64 * xunlian_mult * pt_youqing_mult * pt_bonus_mult) as i32 - status[5];
     let pt_upper = pt_upper_raw.min(pt_limit).max(0);
     status[5] += pt_upper;
     status
@@ -125,14 +130,7 @@ pub fn find_pt_effect_tier(scenario_pt: i32) -> usize {
 /// 计算地区词条加成档位
 ///
 /// 每获得 **1000** 点剧本PT提升一档，最高5档（`region_bonus` 长度 6：0/3/5/7/9/10）。
-///
-/// 实测校准（game6261 第3年 `active_effect_array` 反推）：
-/// - turn48_3 `scenario_pt=500`  → bonus 0（tier 0）
-/// - turn54_2 `scenario_pt=1650` → bonus 3（tier 1）
-/// - turn55_3 `scenario_pt=2300` → bonus 5（tier 2）
-/// - turn57_2 `scenario_pt=3000` → bonus 7（tier 3）
-///
-/// （旧实现按 `/300`，会在同一批数据上算出 3/10/10/10，明显偏大。）
+/// 校准证据见 `.trae/documents/golden_baselines.md`。
 fn calc_region_bonus_tier(year_scenario_pt: i32) -> usize {
     (year_scenario_pt / 1000).min(5) as usize
 }
@@ -163,6 +161,7 @@ fn calc_finals_effect(game: &RamenGame, train: usize) -> RamenTrainingEffect {
             &ramen_data.ramen_fail_effect[2]
         };
         effect.youqing += rmj_effect.youqing;
+        effect.rmj_youqing += rmj_effect.youqing;
         effect.deyilv += rmj_effect.deyilv;
         effect.hint += rmj_effect.hint;
     }
@@ -226,6 +225,7 @@ fn calc_normal_effect(game: &RamenGame, train: usize, year_idx: usize, ramen: Op
                 &ramen_data.ramen_fail_effect[prev_idx]
             };
             effect.youqing += rmj_effect.youqing;
+            effect.rmj_youqing += rmj_effect.youqing;
             effect.deyilv += rmj_effect.deyilv;
             effect.hint += rmj_effect.hint;
         }
@@ -251,12 +251,10 @@ fn calc_normal_effect(game: &RamenGame, train: usize, year_idx: usize, ramen: Op
         if let Some(ramen_idx) = ramen {
             let region = &ramen_data.ramen_region_effect[ramen_idx];
             if region.at_trains.contains(&(train as i32)) {
-                // 地区词条加成随当年剧本PT增加
-                //
-                // 实测：`region_bonus` **只加到友情**（进属性与 PT 的友情乘子），
-                // **不加到 PT加成**。游戏 `active_effect_array` 里 id52 虽显示为
-                // `pt_bonus + region_bonus`，但 PT 上层公式实际只用 region 基础 pt_bonus
-                // （turn57_2: pt_bonus 用 50 得 133，用 57 得 139，实测为 133）。
+                // 地区词条加成随当年剧本PT增加。
+                // `region_bonus` **只加到友情**（进属性与 PT 的友情乘子），**不加到 PT加成**
+                // （PT 上层公式只用 region 基础 `pt_bonus`）。校准证据见
+                // `.trae/documents/golden_baselines.md`。
                 let bonus_tier = calc_region_bonus_tier(game.ramen.scenario_pt);
                 let region_bonus = ramen_data.region_bonus.get(bonus_tier).copied().unwrap_or(0);
                 effect.xunlian += region.xunlian;
@@ -300,9 +298,10 @@ pub fn calc_ramen_training_effect_with_ramen(
         calc_normal_effect(game, train, year_idx, ramen)
     };
 
-    // 非友情训练时 youqing 不生效（强制归零），属性与 PT 上层同步归零。
+    // 非友情训练时友情不生效（属性与 PT 均强制归零）
     if !is_shining {
         effect.youqing = 0;
+        effect.rmj_youqing = 0;
     }
 
     effect
@@ -358,10 +357,10 @@ pub fn calc_scenario_deyilv(game: &RamenGame) -> i32 {
 ///
 /// 计算公式：
 /// - 属性增加值 = lower_value * (100 + xunlian) / 100 * (100 + youqing) / 100
-/// - PT增加值 = lower_value * (100 + xunlian) / 100 * (100 + youqing) / 100
+/// - PT增加值 = lower_value * (100 + xunlian) / 100 * (100 + youqing - rmj_youqing) / 100
 ///   * (100 + pt_bonus) / 100
 ///
-///   属性与 PT 的友情口径一致（均不剔除 RMJ 友情）；PT 额外乘 `pt_bonus`。
+///   属性用完整友情；PT 的友情**剔除 RMJ 结算部分**，并额外乘 `pt_bonus`。
 ///
 /// 上层数值上限（两者口径独立）：
 /// - 属性上限 = 100 + status_limit
@@ -383,12 +382,13 @@ pub fn apply_ramen_training_value(lower_value: i32, effect: &RamenTrainingEffect
     // 计算上层数值
     let xunlian_mult = (100 + effect.xunlian) as f64 / 100.0;
     let youqing_mult = (100 + effect.youqing) as f64 / 100.0;
+    let pt_youqing_mult = (100 + effect.youqing - effect.rmj_youqing) as f64 / 100.0;
     let pt_bonus_mult = (100 + effect.pt_bonus) as f64 / 100.0;
 
     // 属性训练上层数值
     let status_upper_raw = (lower as f64 * xunlian_mult * youqing_mult) as i32 - lower;
     // PT训练上层数值
-    let pt_upper_raw = (lower as f64 * xunlian_mult * youqing_mult * pt_bonus_mult) as i32 - lower;
+    let pt_upper_raw = (lower as f64 * xunlian_mult * pt_youqing_mult * pt_bonus_mult) as i32 - lower;
 
     // 上层数值上限约束
     let status_limit = 100 + effect.status_limit;
@@ -650,8 +650,8 @@ mod tests {
     /// 「SP獲得上限+100」；属性上限单独吃选项的「獲得上限+100」。
     ///
     /// 回归 `logs/game6260/game6260_turn72_2`（turn72 速训练）：下层 PT=63、
-    /// youqing=175、pt_bonus=100 → PT 上段 raw=283，上限 100+100=200 → 合计 263
-    /// （修复前上限误为 100+100+100=300，算出 346）。
+    /// youqing=175（含 RMJ 25）、pt_bonus=100 → PT 上段 raw=252，上限 100+100=200
+    /// → 合计 263（修复前上限误为 100+100+100=300，算出 346）。
     #[test]
     fn test_super_ramen_pt_upper_cap_uses_finals_extra_only() -> anyhow::Result<()> {
         let workspace_root = get_workspace_root()?;
@@ -673,7 +673,7 @@ mod tests {
 
         let (status, pt) = apply_ramen_training_value(63, &effect, 0);
         // 属性：upper_raw = 63*2.75-63 = 110（< 200，未触发上限）→ 63+110 = 173
-        // PT：  upper_raw = 63*2.75*2.0-63 = 283 → 上限 100+100=200 → 63+200 = 263
+        // PT：  upper_raw = 63*1.0*2.5*2.0-63 = 252 → 上限 100+100=200 → 63+200 = 263
         assert_eq!(status, 173, "属性上段上限 = 100 + status_limit = 200");
         assert_eq!(pt, 263, "PT 上段上限 = 100 + pt_limit = 200，不叠加 status_limit");
         Ok(())
