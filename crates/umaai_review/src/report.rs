@@ -2,12 +2,15 @@
 //!
 //! - **三图**：自绘 SVG（复用 `umaai::plot::svg::Svg` 构建器，零 JS、零第三方
 //!   图表库），作为模板变量经 `|safe` 注入
-//!   - 图1 属性成长曲线（五维实线 + 上限虚线，标年界与继承回合）
-//!   - 图2 运气分双轴（累计折线左轴 + 回合合计Δ柱右轴，伪波动柱置灰）
-//!   - 图3 实际执行行动总计（环形图，execution 推断口径）
-//! - **三表 + 概览卡 + 口径说明**：minijinja 外置模板（`templates/report.html.j2`，
-//!   运行时从文件加载，**改样式不重编译**）；附录数据（赛程 / 覆盖）不在报告
-//!   落表——交给 SKILL 层处理成描述性文字后再考虑显示形式（用户拍板）
+//!   - 图1 五维属性（终局真实值横条 + 上限竖线，技能 PT 加粗列出）
+//!   - 图2 训练分布（年份纵轴 3 横条分段堆叠，比赛与其他合并）
+//!   - 图3 运气走势（累计折线左轴 + 回合合计Δ柱右轴 + 关注点编号与图下注记，
+//!     年度底色区，伪波动柱置灰）
+//! - **单一两栏网格**（叙述卡化 + 双卡合一 + 图表合并卡；奇数末格跨栏对齐；
+//!   口径速览已删——判据全文在 digest.context.criteria）：minijinja 外置模板
+//!   （`templates/report.html.j2`，运行时从文件加载，**改样式不重编译**）；
+//!   附录数据（赛程 / 覆盖）不在报告落表——交给 SKILL 层处理成描述性文字后
+//!   再考虑显示形式（用户拍板）
 //! - 模板查找顺序：exe 同级 `templates/` → exe 上级（skill 布局 `bin/` +
 //!   `templates/`）→ cwd 及其祖先的 `templates/` 与
 //!   `crates/umaai_review/templates/`（开发期）
@@ -105,7 +108,7 @@ pub fn build_charts(digest: &Digest) -> Charts {
     Charts {
         status: chart_status(&digest.timeline),
         luck: chart_luck(&digest.luck, &digest.decisions),
-        actions: chart_actions(&digest.execution)
+        actions: chart_actions(&digest.execution, &digest.decisions)
     }
 }
 
@@ -133,7 +136,6 @@ pub fn render_with_template(
     let source = fs::read_to_string(tpl_path)
         .with_context(|| format!("读取模板失败: {}", tpl_path.display()))?;
     let charts = build_charts(digest);
-    let last = digest.timeline.last();
     let match_rate = if digest.execution.is_empty() {
         0.0
     } else {
@@ -142,19 +144,8 @@ pub fn render_with_template(
         if comparable == 0 { 0.0 } else { matched as f64 / comparable as f64 * 100.0 }
     };
     let overview = context! {
-        // 小黑板口径显示值（真实值 > 1200 部分减半）；成长曲线仍用真实值
-        five_status => last.map(|r| r.five_status_display).unwrap_or([0; 5]),
-        vital => last.map(|r| r.vital).unwrap_or(0),
-        motivation => last.map(|r| r.motivation).unwrap_or(0),
         match_rate => format!("{match_rate:.1}")
     };
-    // 地区分身逐次彩圈明细（构造在 clones.rs，brief.md 共用同一份，避免两处格式化分叉）
-    let deck_names: Vec<String> = digest.meta.deck.iter().map(|c| c.name.clone()).collect();
-    let region_rows = digest
-        .clones
-        .as_ref()
-        .map(|c| c.region_detail_rows(&deck_names))
-        .unwrap_or_default();
     // 背景装饰开关：输出目录里有 yayoi.png 才加背景 CSS（skill 只需复制图片，不必改 HTML）
     let has_bg = out_dir.join("yayoi.png").is_file();
 
@@ -167,7 +158,6 @@ pub fn render_with_template(
         .render(context! {
             digest => digest,
             overview => overview,
-            region_rows => region_rows,
             narrative => narrative,
             has_bg => has_bg,
             chart_status => charts.status,
@@ -204,95 +194,76 @@ pub(crate) fn find_template(name: &str) -> Option<PathBuf> {
     cands.into_iter().find(|p| p.is_file())
 }
 
-// ======================= 图1：属性成长曲线 =======================
+// ======================= 图1：属性-上限（终局） =======================
 
-/// 图1：五维成长（实线）+ 上限（虚线）；年界竖线、继承点线标记（§8）
+/// 图1：五维属性与上限的关系（横条与刻度 = 终局真实值，轨道末竖线 = 上限）+ 技能 PT 值
+///
+/// 用户 2026-10-08 拍板：由「属性成长曲线」改为属性-上限图——只列五维与对应上限
+/// 的关系，技能 PT 只**列出**数值（独立行，不与五维共刻度）。数值文本**只列显示值**
+/// （真实值 > 1200 部分减半，小黑板口径；`timeline.five_status_display`）；触顶
+/// （真实值 ≥ 上限）在数值后标注；底部图例说明行已删。
 fn chart_status(tl: &[TimelineRow]) -> String {
-    let mut by_turn: BTreeMap<u32, &TimelineRow> = BTreeMap::new();
-    for r in tl {
-        by_turn.insert(r.turn, r); // 升序 → 后写覆盖 = 回合末
+    let Some(last) = tl.last() else {
+        return note_svg("图1 五维属性：无 timeline 数据");
+    };
+    let (w, h) = (470.0, 256.0);
+    let (x0, x1) = (56.0, 368.0);
+    let top = 40.0;
+    let row_h = 37.0;
+    // 刻度 = 五维值与上限的最大值（技能 PT 不参与）
+    let mut amax = 1.0f64;
+    for i in 0..5 {
+        amax = amax.max(last.five_status[i] as f64).max(last.five_status_limit[i] as f64);
     }
-    if by_turn.is_empty() {
-        return note_svg("图1 属性成长曲线：无 timeline 数据");
-    }
-    let t1 = (*by_turn.keys().max().unwrap_or(&77) as f64) + 1.0;
-    let mut ymax: f64 = 100.0;
-    for r in by_turn.values() {
-        for i in 0..5 {
-            ymax = ymax.max(r.five_status[i] as f64).max(r.five_status_limit[i] as f64);
-        }
-    }
-    let (w, h) = (900.0, 380.0);
-    let (x0, x1, top, ph) = (56.0, 706.0, 40.0, 280.0);
-    let x = |t: f64| x0 + t / t1 * (x1 - x0);
-    let y = y_map_fn(top, ph, 0.0, ymax);
+    let ax = |v: f64| x0 + (v / amax).max(0.0) * (x1 - x0);
     let mut svg = Svg::new(w, h);
-    svg.text(w / 2.0, 20.0, "属性成长曲线（实线 = 当前值 / 虚线 = 上限）", 13.5, "middle");
-    // 纵轴网格与刻度
-    for &v in &nice_ticks(0.0, ymax) {
-        svg.text(x0 - 6.0, y(v) + 4.0, &fmt_tick(v), 10.0, "end");
-        svg.line(x0, y(v), x1, y(v), "#e8e8e8", 0.5);
+    svg.text(w / 2.0, 18.0, "五维属性（显示值）", 13.0, "middle");
+    for (i, (name, clr)) in ATTRS.iter().enumerate() {
+        let bar_y = top + i as f64 * row_h + 8.0;
+        let bar_h = 14.0;
+        let (v, lim) = (last.five_status[i] as f64, last.five_status_limit[i] as f64);
+        // 底轨（浅灰，到上限为止）+ 当前值条（条与刻度 = 真实值，视觉量级不变）
+        svg.rect(x0, bar_y, (ax(lim) - x0).max(0.5), bar_h, "#ececec", 1.0);
+        svg.rect(x0, bar_y, (ax(v) - x0).max(0.5), bar_h, clr, 0.92);
+        // 上限竖线
+        svg.line(ax(lim), bar_y - 3.0, ax(lim), bar_y + bar_h + 3.0, "#333333", 1.3);
+        svg.text(x0 - 8.0, bar_y + 12.0, name, 12.0, "end");
+        // 数值只列显示值（真实值 > 1200 部分减半）；触顶按真实值判定
+        let tag = if v >= lim { " 触顶" } else { "" };
+        svg.text(x1 + 10.0, bar_y + 12.0, &format!("{}{}", last.five_status_display[i], tag), 11.0, "start");
     }
-    // 横轴刻度（每 8 回合）
-    let mut t = 0.0;
-    while t < t1 {
-        svg.line(x(t), top + ph, x(t), top + ph + 5.0, "#555", 0.8);
-        svg.text(x(t), top + ph + 18.0, &format!("{}", t as i32), 10.0, "middle");
-        t += 8.0;
-    }
-    svg.text((x0 + x1) / 2.0, top + ph + 36.0, "回合", 11.0, "middle");
-    // 年界竖线（浅灰实线）
-    for &b in &[24.0, 48.0, 72.0] {
-        if b < t1 {
-            svg.line(x(b), top, x(b), top + ph, "#b8b8b8", 1.0);
-            svg.text(x(b) + 3.0, top + 11.0, &format!("年界{b:.0}"), 9.0, "start");
-        }
-    }
-    // 继承回合（紫色点线）
-    for &b in &[30.0, 54.0] {
-        if b < t1 {
-            svg.polyline(&[(x(b), top), (x(b), top + ph)], "#9333ea", 1.2, true);
-            svg.text(x(b) + 3.0, top + 24.0, &format!("继承{b:.0}"), 9.0, "start");
-        }
-    }
-    // 五维曲线 + 上限虚线
-    for (i, (_, clr)) in ATTRS.iter().enumerate() {
-        let cur: Vec<(f64, f64)> = by_turn
-            .values()
-            .map(|r| (x(r.turn as f64), y(r.five_status[i] as f64)))
-            .collect();
-        let lim: Vec<(f64, f64)> = by_turn
-            .values()
-            .map(|r| (x(r.turn as f64), y(r.five_status_limit[i] as f64)))
-            .collect();
-        svg.polyline(&cur, clr, 1.8, false);
-        svg.polyline(&lim, clr, 1.0, true);
-    }
-    // 图例（右侧）
-    let mut ly = top + 6.0;
-    for (name, clr) in ATTRS {
-        svg.line(x1 + 18.0, ly + 6.0, x1 + 40.0, ly + 6.0, clr, 1.8);
-        svg.text(x1 + 46.0, ly + 10.0, name, 11.0, "start");
-        ly += 20.0;
-    }
-    svg.polyline(&[(x1 + 18.0, ly + 6.0), (x1 + 40.0, ly + 6.0)], "#888888", 1.0, true);
-    svg.text(x1 + 46.0, ly + 10.0, "上限", 11.0, "start");
-    ly += 20.0;
-    svg.line(x1 + 18.0, ly + 6.0, x1 + 40.0, ly + 6.0, "#b8b8b8", 1.0);
-    svg.text(x1 + 46.0, ly + 10.0, "年界", 11.0, "start");
-    ly += 20.0;
-    svg.polyline(&[(x1 + 18.0, ly + 6.0), (x1 + 40.0, ly + 6.0)], "#9333ea", 1.2, true);
-    svg.text(x1 + 46.0, ly + 10.0, "继承", 11.0, "start");
-    svg.frame(x0, top, x1 - x0, ph, "#333333", 1.0);
+    // 分隔线 + 技能 PT 值（仅列出，不与五维共刻度；加粗——用户 2026-10-08 拍板）
+    let sep_y = top + 5.0 * row_h;
+    svg.line(x0 - 26.0, sep_y, x1 + 76.0, sep_y, "#e5e7eb", 1.0);
+    svg.push(format!(
+        r#"<text x="{:.1}" y="{:.1}" font-size="11" text-anchor="end" font-weight="bold">技能PT</text>"#,
+        x0 - 8.0,
+        sep_y + 24.0
+    ));
+    svg.push(format!(
+        r#"<text x="{:.1}" y="{:.1}" font-size="12" text-anchor="start" font-weight="bold">{}</text>"#,
+        x0 + 4.0,
+        sep_y + 24.0,
+        last.skill_pt
+    ));
+    // 底部图例说明行已删（用户 2026-10-08 拍板）；h 收至 PT 行下方
     svg.render()
 }
 
-// ======================= 图2：运气分双轴 =======================
+// ======================= 图3：运气分双轴（含关注点） =======================
 
-/// 图2：累计运气分折线（左轴）+ 回合合计Δ柱（右轴）；伪波动柱置灰（§8、§6.2）
+/// 圆圈数字（关注点编号 ①-⑥；MS YaHei / Noto 均覆盖）
+const CIRCLED: [&str; 6] = ["①", "②", "③", "④", "⑤", "⑥"];
+
+/// 图3：累计运气分折线（左轴）+ 回合合计Δ柱（右轴）+ **关注点编号** + 正 / 负底色带
+///
+/// 用户 2026-10-08 拍板：图表改两栏宽度（470）；图上标「关注点」编号（top_gain /
+/// top_loss 各取前 3、按回合去重，≤6 个）——编号的解释（回合 + Δ + 性质）由
+/// 运气走势文字承担，图内不再逐条注记；底色带按累计运气符号分 run（正浅绿 /
+/// 负浅红，零点插值切开、同色合并）。伪波动柱置灰（§8、§6.2）。
 fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
     if luck.series.is_empty() {
-        return note_svg("图2 运气分：无决策数据");
+        return note_svg("图3 运气走势：无决策数据");
     }
     let mut delta_by_turn: BTreeMap<u32, f64> = BTreeMap::new();
     for r in dec {
@@ -301,9 +272,22 @@ fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
         }
     }
     let flagged: HashSet<u32> = luck.flagged_turns.iter().map(|f| f.turn).collect();
+    // 关注点：正 / 负极值各取前 3，按回合去重后按回合排序（≤6 个）
+    let mut points: Vec<(u32, f64)> = Vec::new();
+    for list in [&luck.top_gain, &luck.top_loss] {
+        for t in list.iter().take(3) {
+            if !points.iter().any(|(turn, _)| *turn == t.turn) {
+                points.push((t.turn, t.delta));
+            }
+        }
+    }
+    points.sort_by_key(|(t, _)| *t);
+    points.truncate(CIRCLED.len());
+
     let t1 = (luck.series.last().map(|p| p.turn).unwrap_or(77) as f64 + 1.0).max(24.0);
-    let (w, h) = (900.0, 370.0);
-    let (x0, x1, top, ph) = (64.0, 760.0, 40.0, 250.0);
+    // 两栏宽度（图下仅 1 行图例；关注点编号的解释由走势文字承担——用户口径）
+    let (w, h) = (470.0, 308.0);
+    let (x0, x1, top, ph) = (44.0, 434.0, 32.0, 226.0);
     let x = |t: f64| x0 + t / t1 * (x1 - x0);
     // 左轴：累计运气分
     let (mut llo, mut lhi) = (0.0f64, 0.0f64);
@@ -314,26 +298,57 @@ fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
     let lpad = ((lhi - llo) * 0.08).max(10.0);
     (llo, lhi) = (llo - lpad, lhi + lpad);
     let yl = y_map_fn(top, ph, llo, lhi);
-    // 右轴：回合 Δ
+    // 右轴：回合 Δ（不画右刻度——关注点注记已带数值，避免半宽拥挤）
     let (mut dlo, mut dhi) = (0.0f64, 0.0f64);
     for &d in delta_by_turn.values() {
         dlo = dlo.min(d);
         dhi = dhi.max(d);
     }
-    let dpad = ((dhi - dlo) * 0.08).max(50.0);
+    let dpad = ((dhi - dlo) * 0.12).max(60.0);
     (dlo, dhi) = (dlo - dpad, dhi + dpad);
     let yr = y_map_fn(top, ph, dlo, dhi);
 
     let mut svg = Svg::new(w, h);
-    svg.text(
-        w / 2.0,
-        20.0,
-        "运气分双轴（折线 = 累计运气分·左轴；柱 = 回合合计Δ·右轴；灰 = 伪波动）",
-        13.5,
-        "middle"
-    );
+    svg.text(w / 2.0, 16.0, "运气走势（折线 = 累计运气分·左轴；柱 = 回合合计Δ；灰 = 伪波动）", 11.5, "middle");
+    // 正 / 负运气底色带：按累计运气分符号分 run（零点处线性插值切开、同色连续段
+    // 合并；正段浅绿、负段浅红——与走势文字的「阴跌 / 强势段」描述对应，用户口径）
+    {
+        let pos = "#ecfdf5";
+        let neg = "#fef2f2";
+        let mut segs: Vec<(f64, f64, &str)> = Vec::new();
+        for w2 in luck.series.windows(2) {
+            let (p0, p1) = (&w2[0], &w2[1]);
+            let (v0, v1) = (p0.total_luck, p1.total_luck);
+            let (ta, tb) = (p0.turn as f64, p1.turn as f64);
+            if (v0 >= 0.0) == (v1 >= 0.0) {
+                segs.push((ta, tb, if v1 >= 0.0 { pos } else { neg }));
+            } else {
+                // 零点跨界：按插值位置切成两段
+                let tc = if (v1 - v0).abs() < 1e-9 {
+                    (ta + tb) / 2.0
+                } else {
+                    ta + (0.0 - v0) / (v1 - v0) * (tb - ta)
+                };
+                segs.push((ta, tc, if v0 >= 0.0 { pos } else { neg }));
+                segs.push((tc, tb, if v1 >= 0.0 { pos } else { neg }));
+            }
+        }
+        // 同色相邻段合并（series 逐点相连，段首尾相接）
+        let mut i = 0;
+        while i + 1 < segs.len() {
+            if segs[i].2 == segs[i + 1].2 && (segs[i].1 - segs[i + 1].0).abs() < 1e-9 {
+                segs[i].1 = segs[i + 1].1;
+                segs.remove(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+        for (ta, tb, clr) in segs {
+            svg.rect(x(ta), top, (x(tb) - x(ta)).max(0.5), ph, clr, 1.0);
+        }
+    }
     // 柱（先画，折线覆盖其上）
-    let bw = (x1 - x0) / (t1 + 1.0) * 0.7;
+    let bw = (x1 - x0) / (t1 + 1.0) * 0.62;
     for (&t, &d) in &delta_by_turn {
         let color = if flagged.contains(&t) {
             "#9e9e9e"
@@ -356,40 +371,51 @@ fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
         .iter()
         .map(|p| (x(p.turn as f64), yl(p.total_luck)))
         .collect();
-    svg.polyline(&pts, "#c44e52", 1.8, false);
-    // 轴刻度（左红右黑）
+    svg.polyline(&pts, "#c44e52", 1.6, false);
+    // 左轴刻度（紧凑）
     for &v in &nice_ticks(llo, lhi) {
-        svg.text(x0 - 6.0, yl(v) + 4.0, &fmt_tick(v), 10.0, "end");
+        svg.text(x0 - 5.0, yl(v) + 3.5, &fmt_tick(v), 9.0, "end");
     }
-    for &v in &nice_ticks(dlo, dhi) {
-        svg.text(x1 + 6.0, yr(v) + 4.0, &fmt_tick(v), 10.0, "start");
-    }
-    // 横轴刻度
+    // 横轴刻度（每 12 回合）
     let mut t = 0.0;
     while t <= t1 {
-        svg.line(x(t), top + ph, x(t), top + ph + 5.0, "#555", 0.8);
-        svg.text(x(t), top + ph + 18.0, &format!("{}", t as i32), 10.0, "middle");
-        t += 8.0;
+        svg.line(x(t), top + ph, x(t), top + ph + 4.0, "#555", 0.8);
+        svg.text(x(t), top + ph + 15.0, &format!("{}", t as i32), 9.0, "middle");
+        t += 12.0;
     }
-    svg.text((x0 + x1) / 2.0, top + ph + 34.0, "回合", 11.0, "middle");
-    // 图例（横排）
-    let ly = top + ph + 54.0;
-    svg.line(x0, ly, x0 + 24.0, ly, "#c44e52", 1.8);
-    svg.text(x0 + 30.0, ly + 4.0, "累计运气分（左轴）", 10.5, "start");
-    svg.rect(x0 + 170.0, ly - 7.0, 12.0, 12.0, "#2ca02c", 0.85);
-    svg.text(x0 + 188.0, ly + 4.0, "回合Δ 正", 10.5, "start");
-    svg.rect(x0 + 270.0, ly - 7.0, 12.0, 12.0, "#d62728", 0.85);
-    svg.text(x0 + 288.0, ly + 4.0, "回合Δ 负", 10.5, "start");
-    svg.rect(x0 + 370.0, ly - 7.0, 12.0, 12.0, "#9e9e9e", 0.85);
-    svg.text(x0 + 388.0, ly + 4.0, "伪波动（年界/继承/RMJ）", 10.5, "start");
+    // 关注点编号（柱端白底圆 + 数字；正跳在柱顶上方、负跳在柱底下方）
+    for (i, &(turn, d)) in points.iter().enumerate() {
+        let mx = x(turn as f64);
+        let my = if d >= 0.0 {
+            (yr(d) - 10.0).max(top + 8.0)
+        } else {
+            (yr(d) + 11.0).min(top + ph - 8.0)
+        };
+        svg.push(format!(
+            r##"<circle cx="{mx:.1}" cy="{my:.1}" r="7" fill="#ffffff" stroke="#374151" stroke-width="1.2"/>"##
+        ));
+        svg.text(mx, my + 3.5, CIRCLED[i], 9.5, "middle");
+    }
     svg.frame(x0, top, x1 - x0, ph, "#333333", 1.0);
+    // 图下一行图例（正 / 负底色与关注点编号不进图例——解释由走势文字承担，用户口径）
+    let ny = top + ph + 32.0;
+    svg.line(x0, ny - 3.0, x0 + 18.0, ny - 3.0, "#c44e52", 1.6);
+    svg.text(x0 + 22.0, ny, "累计运气分（左轴）", 9.5, "start");
+    svg.rect(x0 + 120.0, ny - 8.0, 9.0, 9.0, "#2ca02c", 0.85);
+    svg.text(x0 + 133.0, ny, "Δ 正", 9.5, "start");
+    svg.rect(x0 + 170.0, ny - 8.0, 9.0, 9.0, "#d62728", 0.85);
+    svg.text(x0 + 183.0, ny, "Δ 负", 9.5, "start");
+    svg.rect(x0 + 220.0, ny - 8.0, 9.0, 9.0, "#9e9e9e", 0.85);
+    svg.text(x0 + 233.0, ny, "伪波动", 9.5, "start");
+    svg.text(x0 + 285.0, ny, "回合", 9.5, "start");
     svg.render()
 }
 
-// ======================= 图3：行动总计（环形图） =======================
+// ======================= 图2：行动分年累积 =======================
 
-/// 行动类别与配色（训练位与图1 五维一致）
-const ACTION_CATS: [(&str, &str); 12] = [
+/// 行动分段配色（训练按维展开；「X训练·继承混合」并入对应训练；友人出行并入
+/// 出行；**比赛与治病 / 剧本 / 未知合并**——用户 2026-10-08 拍板）
+const SEGMENTS: [(&str, &str); 8] = [
     ("速训练", "#1f77b4"),
     ("耐训练", "#ff7f0e"),
     ("力训练", "#2ca02c"),
@@ -397,98 +423,117 @@ const ACTION_CATS: [(&str, &str); 12] = [
     ("智训练", "#9467bd"),
     ("休息", "#8c8c8c"),
     ("出行", "#f59e0b"),
-    ("友人出行", "#ec4899"),
-    ("比赛", "#7b6cb5"),
-    ("治病", "#38bdf8"),
-    ("剧本", "#a8a29e"),
-    ("未知", "#57534e")
+    // 青色：与智训练的紫色拉开距离（用户 2026-10-08 拍板「颜色过于接近」）
+    ("比赛/其他", "#06b6d4")
 ];
 
-/// 极坐标 → 直角坐标（deg 以正上方为 0°，顺时针）
-fn pt(cx: f64, cy: f64, r: f64, deg: f64) -> (f64, f64) {
-    let rad = deg.to_radians();
-    (cx + r * rad.cos(), cy + r * rad.sin())
-}
-
-/// 图3：实际执行行动总计（环形图，execution 推断口径；扇形走 `Svg::push`
-/// 原生 path——构建器只有基元方法，圆弧需手拼）
-fn chart_actions(exec: &[ExecRow]) -> String {
-    if exec.is_empty() {
-        return note_svg("图3 行动总计：无执行推断数据");
+/// 实际动作 → 分段下标（`starts_with` 覆盖「X训练·继承混合」后缀）
+fn seg_idx(actual: &str) -> usize {
+    if actual == "友人出行" {
+        return 6; // 并入「出行」
     }
-    let mut counts = vec![0u32; ACTION_CATS.len()];
-    for r in exec {
-        if let Some(ci) = ACTION_CATS.iter().position(|(c, _)| *c == r.actual_action) {
-            counts[ci] += 1;
+    for (i, (name, _)) in SEGMENTS.iter().enumerate() {
+        if *name == "比赛/其他" {
+            continue; // 非前缀名，走兜底
+        }
+        if actual.starts_with(name) {
+            return i;
         }
     }
-    let total: u32 = counts.iter().sum();
-    let present: Vec<usize> = (0..ACTION_CATS.len()).filter(|&i| counts[i] > 0).collect();
-    let (w, h) = (900.0, 330.0);
-    let (cx, cy, r_out, r_in) = (200.0, 185.0, 118.0, 62.0);
-    let mut svg = Svg::new(w, h);
-    svg.text(w / 2.0, 20.0, "实际执行行动总计（execution 推断口径）", 13.5, "middle");
-    // 中心总数
-    svg.text(cx, cy - 2.0, &total.to_string(), 24.0, "middle");
-    svg.text(cx, cy + 22.0, "回合", 11.0, "middle");
-    if present.len() == 1 {
-        // 单一类别：整环（360° 圆弧是退化 path，直接画圆环）
-        let (_, clr) = ACTION_CATS[present[0]];
-        svg.push(format!(
-            r#"<circle cx="{cx}" cy="{cy}" r="{}" fill="none" stroke="{clr}" stroke-width="{}" stroke-opacity="0.9"/>"#,
-            (r_out + r_in) / 2.0,
-            r_out - r_in
-        ));
+    7 // 比赛 / 治病 / 剧本 / 未知 → 比赛与其他
+}
+
+/// 年段下标（0/1/2；**第三年含超拉期与后续回合**——用户口径）
+fn year_idx(turn: u32) -> usize {
+    if turn < 24 {
+        0
+    } else if turn < 48 {
+        1
     } else {
-        let mut acc = 0.0f64; // 累计占比（起点 = 正上方，顺时针）
-        for &i in &present {
-            let n = counts[i];
-            let (name, clr) = ACTION_CATS[i];
-            let frac = n as f64 / total as f64;
-            let a0 = acc * 360.0;
-            let a1 = (acc + frac) * 360.0;
-            acc += frac;
-            let (p0x, p0y) = pt(cx, cy, r_out, a0);
-            let (p1x, p1y) = pt(cx, cy, r_out, a1);
-            let (q0x, q0y) = pt(cx, cy, r_in, a0);
-            let (q1x, q1y) = pt(cx, cy, r_in, a1);
-            let large = u8::from(a1 - a0 > 180.0);
-            let d = format!(
-                "M {q0x:.2} {q0y:.2} L {p0x:.2} {p0y:.2} \
-                 A {r_out:.2} {r_out:.2} 0 {large} 1 {p1x:.2} {p1y:.2} \
-                 L {q1x:.2} {q1y:.2} A {r_in:.2} {r_in:.2} 0 {large} 0 {q0x:.2} {q0y:.2} Z"
-            );
-            svg.push(format!(
-                r##"<path d="{d}" fill="{clr}" fill-opacity="0.9" stroke="#ffffff" stroke-width="1.5"/>"##
-            ));
-            // 大扇区（≥4%）外圈标签
-            if frac >= 0.04 {
-                let mid = (a0 + a1) / 2.0;
-                let (lx, ly) = pt(cx, cy, r_out + 30.0, mid);
-                svg.text(lx, ly + 4.0, &format!("{name} {n}"), 10.5, "middle");
+        2
+    }
+}
+
+const YEAR_LABELS: [&str; 3] = ["第1年", "第2年", "第3年(含超拉)"];
+
+/// 图2：实际执行行动分年累积（年份纵轴 3 横条分段堆叠）+ 第 4 行「吃面后训练选择」
+/// （全程含超拉期：当回合 ramen_select 决策选了「吃面」且实际训练了；只看选了什么
+/// 训练、不看吃了什么面——用户 2026-10-08 拍板）
+fn chart_actions(exec: &[ExecRow], dec: &[DecRow]) -> String {
+    if exec.is_empty() {
+        return note_svg("图2 训练分布：无执行推断数据");
+    }
+    let mut counts = [[0u32; 3]; SEGMENTS.len()];
+    for r in exec {
+        counts[seg_idx(&r.actual_action)][year_idx(r.turn)] += 1;
+    }
+    // 吃面回合 = calc 行中 kind=ramen_select 且选中描述以「吃面」开头（不吃面路径为「不吃面」）
+    let eat_turns: HashSet<u32> = dec
+        .iter()
+        .filter(|r| r.decision_kind == "ramen_select" && r.chosen.desc.starts_with("吃面"))
+        .map(|r| r.turn)
+        .collect();
+    // 吃面后训练选择（全程）：训练维计数（含「·继承混合」；非训练回合不计）
+    let mut eat_counts = [0u32; 5];
+    for r in exec {
+        if eat_turns.contains(&r.turn) {
+            for (i, (name, _)) in SEGMENTS.iter().enumerate().take(5) {
+                if r.actual_action.starts_with(name) {
+                    eat_counts[i] += 1;
+                    break;
+                }
             }
         }
     }
-    // 图例（右侧两列：色块 + 名称 + 次数 + 占比）
-    let lx = 470.0;
-    let mut row = 0usize;
-    for &i in &present {
-        let (name, clr) = ACTION_CATS[i];
-        let n = counts[i];
-        let col = row % 2;
-        let line = row / 2;
-        let xx = lx + col as f64 * 215.0;
-        let yy = 70.0 + line as f64 * 24.0;
-        svg.rect(xx, yy, 12.0, 12.0, clr, 0.9);
-        svg.text(
-            xx + 17.0,
-            yy + 11.0,
-            &format!("{name} {n}（{:.1}%）", n as f64 / total as f64 * 100.0),
-            11.0,
-            "start"
-        );
-        row += 1;
+    let eat_total: u32 = eat_counts.iter().sum();
+    let year_totals: [u32; 3] = std::array::from_fn(|yi| counts.iter().map(|c| c[yi]).sum());
+    let max_total = year_totals.iter().copied().chain([eat_total]).max().unwrap_or(1).max(1) as f64;
+    let (w, h) = (470.0, 262.0);
+    let (x0, x1) = (74.0, 404.0);
+    let top = 42.0;
+    let row_h = 40.0;
+    let bar_h = 15.0;
+    let x = |v: f64| x0 + v / max_total * (x1 - x0);
+    let mut svg = Svg::new(w, h);
+    svg.text(w / 2.0, 16.0, "训练分布（分年累积）", 13.0, "middle");
+    // 画单行累积条（分段 + 总数标签）
+    let draw_row = |svg: &mut Svg, ry: f64, segs: &[u32]| {
+        let mut acc = 0u32;
+        for (si, (_, clr)) in SEGMENTS.iter().enumerate() {
+            let n = segs.get(si).copied().unwrap_or(0);
+            if n == 0 {
+                continue;
+            }
+            let xa = x(acc as f64);
+            let xb = x((acc + n) as f64);
+            svg.rect(xa, ry, (xb - xa).max(1.2), bar_h, clr, 0.95);
+            if xb - xa >= 19.0 {
+                svg.text((xa + xb) / 2.0, ry + bar_h - 2.5, &n.to_string(), 9.0, "middle");
+            }
+            acc += n;
+        }
+        svg.text(x(acc as f64) + 6.0, ry + 12.0, &format!("{acc}"), 10.0, "start");
+    };
+    for (yi, lab) in YEAR_LABELS.iter().enumerate() {
+        let ry = top + yi as f64 * row_h;
+        svg.text(x0 - 8.0, ry + 12.0, lab, 11.0, "end");
+        draw_row(&mut svg, ry, &counts.iter().map(|c| c[yi]).collect::<Vec<_>>());
     }
+    // 第 4 行：吃面后训练选择（全程含超拉；分隔线区分年段行）
+    let ry = top + 3.0 * row_h;
+    svg.line(x0 - 40.0, ry - 6.0, x1 + 26.0, ry - 6.0, "#e5e7eb", 1.0);
+    svg.text(x0 - 8.0, ry + 12.0, "吃面后训练", 11.0, "end");
+    draw_row(&mut svg, ry, &eat_counts.to_vec());
+    // 图例（8 项分两行）
+    for (si, (name, clr)) in SEGMENTS.iter().enumerate() {
+        let col = si % 4;
+        let line = si / 4;
+        let lx = x0 + col as f64 * 88.0;
+        let ly = top + 4.0 * row_h + 10.0 + line as f64 * 17.0;
+        svg.rect(lx, ly, 10.0, 8.0, clr, 0.95);
+        svg.text(lx + 14.0, ly + 8.0, name, 9.5, "start");
+    }
+    // 底部「execution 推断口径」说明行已删（用户 2026-10-08 拍板）
     svg.render()
 }
 
@@ -623,7 +668,11 @@ mod tests {
                     LuckPoint { turn: 77, seq: 2, total_luck: -3186.05 },
                 ],
                 top_gain: vec![],
-                top_loss: vec![],
+                top_loss: vec![crate::decisions::TurnDelta {
+                    turn: 30,
+                    delta: -500.0,
+                    segments: vec![-500.0]
+                }],
                 raw_delta_stats: Default::default(),
                 flagged_turns: vec![crate::decisions::FlaggedTurn { turn: 30, reason: "inherit".into() }],
             },
@@ -686,7 +735,7 @@ mod tests {
             max_vital: 108,
             motivation: 5,
             five_status: five,
-            five_status_display: five,
+            five_status_display: crate::score::display_status_array(five),
             five_status_limit: limit,
             skill_pt: 100,
             train_level_count: [1; 5],
@@ -709,13 +758,21 @@ mod tests {
         let d = test_digest();
         let c = build_charts(&d);
         println!("图1 {} 字节 / 图2 {} / 图3 {}",
-            c.status.len(), c.luck.len(), c.actions.len());
-        assert!(c.status.contains("<svg") && c.status.contains("属性成长曲线"));
-        assert!(c.status.contains("年界") && c.status.contains("继承30"));
-        assert!(c.luck.contains("运气分双轴") && c.luck.contains("<polyline"));
-        assert!(c.actions.contains("实际执行行动总计"));
-        // 单一类别（测试数据只有速训练）→ 整环 circle 而非 path 扇形
-        assert!(c.actions.contains("<circle") && c.actions.contains("77"));
+            c.status.len(), c.actions.len(), c.luck.len());
+        // 图1 属性-上限：五维条 + 上限竖线 + 数值 + 技能PT 行
+        assert!(c.status.contains("<svg") && c.status.contains("五维属性"));
+        assert!(c.status.contains("2200") && !c.status.contains("3200/"), "数值只列显示值");
+        assert!(c.status.contains("技能PT"));
+        // 图2 行动分年累积：年段标签 + 分段图例 + 第 4 行「吃面后训练」
+        assert!(c.actions.contains("训练分布"));
+        assert!(c.actions.contains("第1年") && c.actions.contains("第3年(含超拉)"));
+        assert!(c.actions.contains("速训练") && c.actions.contains("比赛/其他"));
+        assert!(c.actions.contains("吃面后训练"), "第 4 行：吃面后训练选择");
+        // 图3 运气分双轴：关注点编号圆圈 + 正 / 负底色带；图内不注记（解释归走势文字）
+        assert!(c.luck.contains("运气走势") && c.luck.contains("<polyline"));
+        assert!(c.luck.contains("①"), "关注点编号标记");
+        assert!(!c.luck.contains("t30 -500"), "图内不再逐条注记");
+        assert!(c.luck.contains("#ecfdf5") && c.luck.contains("#fef2f2"), "正 / 负底色带");
     }
 
     /// 模板端到端：渲染 → 校验关键内容（模板经 find_template 定位，测试 cwd
@@ -736,15 +793,21 @@ mod tests {
         assert!(html.contains("吹波糖"));
         assert!(html.contains("UA9"));
         assert!(html.contains("<svg"), "三图 SVG 应经 |safe 注入");
-        assert!(html.contains("图1") && html.contains("图3"));
-        assert!(!html.contains("图4"), "行动图已改为总计环形（原图4 删除）");
+        assert!(html.contains("图1") && html.contains("图2") && html.contains("图3"));
+        // 单一两栏网格 + 叙述卡化 + 终局估分措辞
+        assert!(html.contains("cols"), "两栏布局 class");
+        assert!(html.contains("终局估分 62500（UA9）"), "头部措辞＝终局估分");
+        assert!(html.contains("总体") && html.contains("运气走势") && html.contains("检查项"));
+        assert!(html.contains("五维属性") && html.contains("训练分布") && html.contains("运气走势"));
+        assert!(!html.contains("略高于小黑板"), "评分对比措辞已删");
+        // 口径速览卡片已删（用户 2026-10-08 拍板）；判据全文在 digest.context.criteria
+        assert!(!html.contains("口径速览"), "口径速览卡片已删除");
         // 4 个叙述占位标记（skill 层回填）；检查项表与决策明细表已移除
         for marker in ["NARRATIVE:overview", "NARRATIVE:luck_trend", "NARRATIVE:findings", "NARRATIVE:summary"] {
             assert!(html.contains(marker), "占位标记 {marker} 应存在");
         }
         assert!(!html.contains("mandatory_race_not_won"), "检查项表已换叙述占位");
         assert!(!html.contains("决策明细"), "决策明细表已移除（明细见 decisions.csv）");
-        assert!(html.contains("口径速览"), "口径说明已简化为速览");
         assert!(!html.contains("测试口径"), "context.criteria 全文不再渲染");
         assert!(html.contains("100.0%") || html.contains("100%"), "执行一致率");
         let _ = fs::remove_dir_all(&out_dir);

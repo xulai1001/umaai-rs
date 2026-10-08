@@ -98,7 +98,7 @@ pub fn build(
     for &(label, lo, hi) in SEGMENTS.iter() {
         let end = state.range(lo..=hi).next_back().map(|(_, v)| *v);
         let mut yp = YearProfile { label: label.to_string(), ..Default::default() };
-        for (&t, &i) in train_lenient.range(lo..=hi) {
+        for (_, &i) in train_lenient.range(lo..=hi) {
             yp.train_counts[i] += 1;
         }
         if let Some(cur) = end {
