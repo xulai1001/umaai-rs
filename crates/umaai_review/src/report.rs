@@ -1,11 +1,14 @@
 //! report.html 渲染（文档 §2 架构、§8 报告结构、§11 步骤 7）
 //!
-//! - **三图**：自绘 SVG（复用 `umaai::plot::svg::Svg` 构建器，零 JS、零第三方
+//! - **四图**：自绘 SVG（复用 `umaai::plot::svg::Svg` 构建器，零 JS、零第三方
 //!   图表库），作为模板变量经 `|safe` 注入
-//!   - 图1 五维属性（终局真实值横条 + 上限竖线，技能 PT 加粗列出）
+//!   - 图1 五维属性（终局真实值横条 + 上限竖线，技能 PT 加粗列出；**置于头部
+//!     「终局估分」卡内**——用户 2026-10-09 拍板）
 //!   - 图2 训练分布（年份纵轴 3 横条分段堆叠，比赛与其他合并）
 //!   - 图3 运气走势（累计折线左轴 + 回合合计Δ柱右轴 + 关注点编号与图下注记，
 //!     年度底色区，伪波动柱置灰）
+//!   - 图4 心情走势（干劲 1-5 回合末阶梯折线 + 掉落 / 回升圆点标记，图下 `.note`
+//!     给掉干劲区间的文字解释）
 //! - **单一两栏网格**（叙述卡化 + 双卡合一 + 图表合并卡；奇数末格跨栏对齐；
 //!   口径速览已删——判据全文在 digest.context.criteria）：minijinja 外置模板
 //!   （`templates/report.html.j2`，运行时从文件加载，**改样式不重编译**）；
@@ -42,12 +45,16 @@ const ATTRS: [(&str, &str); 5] = [
     ("智", "#9467bd")
 ];
 
-/// 三图 SVG 产物
+/// 四图 SVG 产物（图4 另带图下注记文本）
 #[derive(Debug, Default)]
 pub struct Charts {
     pub status: String,
     pub luck: String,
-    pub actions: String
+    pub actions: String,
+    /// 图4 心情走势 SVG（`|safe` 注入）
+    pub motivation: String,
+    /// 图4 图下注记：掉干劲区间的文字解释（纯文本，模板不走 `|safe`）
+    pub motivation_note: String
 }
 
 /// skill 写的 4 段叙述（`--narrative <md>` 注入；缺省则模板保留 NARRATIVE 占位）
@@ -103,12 +110,15 @@ pub fn parse_narrative(text: &str) -> Narrative {
     out
 }
 
-/// 生成三图（纯函数，无 IO）
+/// 生成四图（纯函数，无 IO）
 pub fn build_charts(digest: &Digest) -> Charts {
+    let mood = motivation_states(&digest.timeline);
     Charts {
         status: chart_status(&digest.timeline),
         luck: chart_luck(&digest.luck, &digest.decisions),
-        actions: chart_actions(&digest.execution, &digest.decisions)
+        actions: chart_actions(&digest.execution, &digest.decisions),
+        motivation: chart_motivation(&mood),
+        motivation_note: motivation_note(&mood)
     }
 }
 
@@ -162,7 +172,9 @@ pub fn render_with_template(
             has_bg => has_bg,
             chart_status => charts.status,
             chart_luck => charts.luck,
-            chart_actions => charts.actions
+            chart_actions => charts.actions,
+            chart_motivation => charts.motivation,
+            motivation_note => charts.motivation_note
         })?;
 
     fs::create_dir_all(out_dir)
@@ -537,6 +549,157 @@ fn chart_actions(exec: &[ExecRow], dec: &[DecRow]) -> String {
     svg.render()
 }
 
+// ======================= 图4：心情走势（干劲） =======================
+
+/// 掉干劲区间（回合末口径）：一次下降开始，到回到下降前水平的前一回合为止
+///
+/// 区间内继续下降只加深 `floor`、不另起区间；干劲回到 ≥ 起始水平即闭合
+/// （`recover` = 恢复回合）。`end` = 区间内最后一个仍低于起始水平的回合。
+#[derive(Debug)]
+struct MoodEpisode {
+    /// 掉落回合（区间起点）
+    start: u32,
+    /// 区间末（含；仍低于起始水平的最后一个回合）
+    end: u32,
+    /// 下降前水平
+    from: i32,
+    /// 区间内最低值
+    floor: i32,
+    /// 恢复回合（回到 ≥ `from`）；None = 至终局未恢复
+    recover: Option<u32>
+}
+
+/// 回合末干劲序列（timeline 升序 → 后写覆盖，与 brief::turn_states 同口径）
+fn motivation_states(tl: &[TimelineRow]) -> BTreeMap<u32, i32> {
+    let mut m: BTreeMap<u32, i32> = BTreeMap::new();
+    for r in tl {
+        m.insert(r.turn, r.motivation);
+    }
+    m
+}
+
+/// 掉干劲区间切分（状态机：低于区间起始水平则延续，回到即闭合）
+fn mood_episodes(states: &BTreeMap<u32, i32>) -> Vec<MoodEpisode> {
+    let pts: Vec<(u32, i32)> = states.iter().map(|(&t, &m)| (t, m)).collect();
+    let mut eps: Vec<MoodEpisode> = Vec::new();
+    let mut cur: Option<MoodEpisode> = None;
+    let mut prev: Option<i32> = None;
+    for &(t, m) in &pts {
+        if let Some(ep) = cur.as_mut() {
+            if m >= ep.from {
+                // 回到下降前水平 → 闭合（end 停在上一个仍偏低的回合）
+                ep.recover = Some(t);
+                eps.push(cur.take().expect("闭合时 cur 必在"));
+            } else {
+                ep.floor = ep.floor.min(m);
+                ep.end = t;
+            }
+        } else if prev.is_some_and(|p| m < p) {
+            // 新掉落：起始水平 = 上一数据点的干劲
+            cur = Some(MoodEpisode {
+                start: t,
+                end: t,
+                from: prev.expect("is_some_and 已保证"),
+                floor: m,
+                recover: None
+            });
+        }
+        prev = Some(m);
+    }
+    if let Some(ep) = cur {
+        eps.push(ep);
+    }
+    eps
+}
+
+/// 图4：干劲随回合变化（1-5 固定档位、回合末阶梯折线）+ 掉落 / 回升圆点标记
+///
+/// 掉干劲本身归运气（数据外事件，输赛不掉干劲——SKILL 层口径），图只呈现事实；
+/// 掉干劲区间的文字解释由 [`motivation_note`] 生成、经模板 `.note` 注入。
+fn chart_motivation(states: &BTreeMap<u32, i32>) -> String {
+    if states.is_empty() {
+        return note_svg("图4 心情走势：无 timeline 数据");
+    }
+    let pts: Vec<(u32, i32)> = states.iter().map(|(&t, &m)| (t, m)).collect();
+    let t1 = (pts.last().map(|&(t, _)| t).unwrap_or(77) as f64 + 1.0).max(24.0);
+    // 干劲 1-5 固定五档（timeline 字段注释口径），纵轴不按数据伸缩
+    let (lo, hi) = (1.0, 5.0);
+    let (w, h) = (470.0, 146.0);
+    let (x0, x1, top, ph) = (34.0, 440.0, 26.0, 96.0);
+    let x = |t: f64| x0 + t / t1 * (x1 - x0);
+    let y = |v: f64| top + (1.0 - (v - lo) / (hi - lo)) * ph;
+    let mut svg = Svg::new(w, h);
+    svg.text(w / 2.0, 14.0, "心情走势（干劲 1-5，回合末）", 11.5, "middle");
+    // 绝好调（5 档）浅绿底带
+    svg.rect(x0, y(hi), x1 - x0, y(hi - 1.0) - y(hi), "#ecfdf5", 1.0);
+    // 档位网格线 + 左侧档位数字
+    for v in 1..=5 {
+        svg.line(x0, y(v as f64), x1, y(v as f64), "#e5e7eb", 0.8);
+        svg.text(x0 - 6.0, y(v as f64) + 3.5, &v.to_string(), 9.0, "end");
+    }
+    // 阶梯折线：水平延伸到变化回合、变化回合处垂直跳变
+    let mut pl: Vec<(f64, f64)> = Vec::with_capacity(pts.len() * 2);
+    let mut prev_m: Option<i32> = None;
+    for &(t, m) in &pts {
+        if let Some(pm) = prev_m {
+            if m != pm {
+                pl.push((x(t as f64), y(pm as f64)));
+            }
+        }
+        pl.push((x(t as f64), y(m as f64)));
+        prev_m = Some(m);
+    }
+    svg.polyline(&pl, "#7c3aed", 1.8, false);
+    // 掉落（红）/ 回升（绿）标记打在变化回合的新值处
+    for pair in pts.windows(2) {
+        let (_, m_prev) = pair[0];
+        let (t_cur, m_cur) = pair[1];
+        if m_cur < m_prev {
+            svg.circle(x(t_cur as f64), y(m_cur as f64), 3.5, "#d62728", 1.0);
+        } else if m_cur > m_prev {
+            svg.circle(x(t_cur as f64), y(m_cur as f64), 3.5, "#16a34a", 1.0);
+        }
+    }
+    // 横轴刻度（每 12 回合，与图3 一致）
+    let mut t = 0.0;
+    while t <= t1 {
+        svg.line(x(t), top + ph, x(t), top + ph + 4.0, "#555", 0.8);
+        svg.text(x(t), top + ph + 15.0, &format!("{}", t as i32), 9.0, "middle");
+        t += 12.0;
+    }
+    svg.frame(x0, top, x1 - x0, ph, "#333333", 1.0);
+    svg.render()
+}
+
+/// 图4 图下注记：掉干劲区间的文字解释（「t12..t14（5→4，t15 恢复）」式一行）
+///
+/// 区间语义见 [`MoodEpisode`]；无掉落输出「全程干劲无下降」。
+fn motivation_note(states: &BTreeMap<u32, i32>) -> String {
+    if states.is_empty() {
+        return "无 timeline 数据".to_string();
+    }
+    let eps = mood_episodes(states);
+    if eps.is_empty() {
+        return "全程干劲无下降（回合末口径）".to_string();
+    }
+    let parts: Vec<String> = eps
+        .iter()
+        .map(|ep| {
+            let range = if ep.start == ep.end {
+                format!("t{}", ep.start)
+            } else {
+                format!("t{}..t{}", ep.start, ep.end)
+            };
+            let rec = match ep.recover {
+                Some(r) => format!("t{r} 恢复"),
+                None => "终局未恢复".to_string()
+            };
+            format!("{range}（{}→{}，{rec}）", ep.from, ep.floor)
+        })
+        .collect();
+    format!("掉干劲区间：{}", parts.join("；"))
+}
+
 // ======================= 小工具 =======================
 
 /// 数据值 → 像素 y（区间 [lo, hi] 映射到 [top, top+ph]，上大下小）
@@ -606,10 +769,11 @@ mod tests {
 
     /// 构造最小可用 Digest（图表与模板端到端用）
     fn test_digest() -> Digest {
+        // 干劲：t0 = 5，t30 掉到 4，t77 恢复 5（图4 掉落 / 回升标记与区间注记的用例）
         let tl = vec![
-            tl_row(0, [200, 100, 100, 100, 100], [3000; 5]),
-            tl_row(30, [800, 600, 400, 300, 500], [3000; 5]),
-            tl_row(77, [3200, 1900, 1700, 1200, 2100], [3272, 2402, 2240, 2200, 2452]),
+            tl_row(0, [200, 100, 100, 100, 100], [3000; 5], 5),
+            tl_row(30, [800, 600, 400, 300, 500], [3000; 5], 4),
+            tl_row(77, [3200, 1900, 1700, 1200, 2100], [3272, 2402, 2240, 2200, 2452], 5),
         ];
         let dec = vec![DecRow {
             file: "f0.json".to_string(),
@@ -722,8 +886,8 @@ mod tests {
         }
     }
 
-    /// timeline 测试行（只填图表所需字段）
-    fn tl_row(turn: u32, five: [i32; 5], limit: [i32; 5]) -> TimelineRow {
+    /// timeline 测试行（只填图表所需字段；motivation 单独传）
+    fn tl_row(turn: u32, five: [i32; 5], limit: [i32; 5], motivation: i32) -> TimelineRow {
         TimelineRow {
             turn,
             seq: 0,
@@ -733,7 +897,7 @@ mod tests {
             playing_state: 1,
             vital: 100,
             max_vital: 108,
-            motivation: 5,
+            motivation,
             five_status: five,
             five_status_display: crate::score::display_status_array(five),
             five_status_limit: limit,
@@ -752,13 +916,13 @@ mod tests {
         }
     }
 
-    /// 三图冒烟：SVG 结构与关键标记
+    /// 四图冒烟：SVG 结构与关键标记
     #[test]
     fn test_charts_markers() {
         let d = test_digest();
         let c = build_charts(&d);
-        println!("图1 {} 字节 / 图2 {} / 图3 {}",
-            c.status.len(), c.actions.len(), c.luck.len());
+        println!("图1 {} 字节 / 图2 {} / 图3 {} / 图4 {}",
+            c.status.len(), c.actions.len(), c.luck.len(), c.motivation.len());
         // 图1 属性-上限：五维条 + 上限竖线 + 数值 + 技能PT 行
         assert!(c.status.contains("<svg") && c.status.contains("五维属性"));
         assert!(c.status.contains("2200") && !c.status.contains("3200/"), "数值只列显示值");
@@ -773,6 +937,51 @@ mod tests {
         assert!(c.luck.contains("①"), "关注点编号标记");
         assert!(!c.luck.contains("t30 -500"), "图内不再逐条注记");
         assert!(c.luck.contains("#ecfdf5") && c.luck.contains("#fef2f2"), "正 / 负底色带");
+        // 图4 心情走势：阶梯折线 + 掉落（红）/ 回升（绿）标记 + 绝好调底带
+        assert!(c.motivation.contains("心情走势") && c.motivation.contains("<polyline"));
+        assert!(c.motivation.contains("#d62728"), "掉干劲标记");
+        assert!(c.motivation.contains("#16a34a"), "回升标记");
+        assert!(c.motivation.contains("#ecfdf5"), "绝好调底带");
+        assert_eq!(c.motivation_note, "掉干劲区间：t30（5→4，t77 恢复）", "掉干劲区间注记");
+    }
+
+    /// 掉干劲区间切分：单区间 / 连降合并 / 未恢复 / 无掉落
+    #[test]
+    fn test_mood_episodes() {
+        let states: BTreeMap<u32, i32> =
+            [(0, 3), (1, 4), (5, 5), (12, 4), (15, 5), (77, 5)].into_iter().collect();
+        let eps = mood_episodes(&states);
+        println!("{eps:?}");
+        assert_eq!(eps.len(), 1, "开局 3→4→5 爬坡不算掉落，只有 t12 一处");
+        assert_eq!((eps[0].start, eps[0].end, eps[0].from, eps[0].floor), (12, 12, 5, 4));
+        assert_eq!(eps[0].recover, Some(15));
+        assert_eq!(motivation_note(&states), "掉干劲区间：t12（5→4，t15 恢复）");
+        // 连降合并为一个区间（回到起始水平才闭合）+ 尾部未恢复
+        let s2: BTreeMap<u32, i32> =
+            [(0, 5), (10, 4), (20, 3), (30, 4), (40, 5), (50, 4)].into_iter().collect();
+        let eps2 = mood_episodes(&s2);
+        println!("{eps2:?}");
+        assert_eq!(eps2.len(), 2, "t10..t30 连降合并 + t50 尾部掉落");
+        assert_eq!((eps2[0].start, eps2[0].end, eps2[0].from, eps2[0].floor), (10, 30, 5, 3));
+        assert_eq!(eps2[0].recover, Some(40));
+        assert_eq!((eps2[1].start, eps2[1].end, eps2[1].from), (50, 50, 5));
+        assert_eq!(eps2[1].recover, None, "尾部掉落至终局未恢复");
+        assert_eq!(
+            motivation_note(&s2),
+            "掉干劲区间：t10..t30（5→3，t40 恢复）；t50（5→4，终局未恢复）"
+        );
+        // 无掉落（起始即低也不算——只看下降事件）
+        let s3: BTreeMap<u32, i32> = [(0, 4), (5, 4), (77, 4)].into_iter().collect();
+        assert!(mood_episodes(&s3).is_empty());
+        assert_eq!(motivation_note(&s3), "全程干劲无下降（回合末口径）");
+        // 区间连续有数据时 end 覆盖整个低位段（game6263 实测形态）
+        let s4: BTreeMap<u32, i32> =
+            [(0, 3), (1, 4), (5, 5), (12, 4), (13, 4), (14, 4), (15, 5), (16, 5)]
+                .into_iter()
+                .collect();
+        let eps4 = mood_episodes(&s4);
+        assert_eq!((eps4[0].start, eps4[0].end), (12, 14), "区间末 = 回升前最后回合");
+        assert_eq!(motivation_note(&s4), "掉干劲区间：t12..t14（5→4，t15 恢复）");
     }
 
     /// 模板端到端：渲染 → 校验关键内容（模板经 find_template 定位，测试 cwd
@@ -792,8 +1001,14 @@ mod tests {
         assert!(html.contains("单局复盘 · game6234"));
         assert!(html.contains("吹波糖"));
         assert!(html.contains("UA9"));
-        assert!(html.contains("<svg"), "三图 SVG 应经 |safe 注入");
-        assert!(html.contains("图1") && html.contains("图2") && html.contains("图3"));
+        assert!(html.contains("<svg"), "四图 SVG 应经 |safe 注入");
+        assert!(html.contains("图1") && html.contains("图2") && html.contains("图3") && html.contains("图4"));
+        // 图1 已移入头部「终局估分」卡（不再有独立 section；用户 2026-10-09 拍板）
+        assert!(!html.contains("<section><h2>图1"), "图1 不再是独立 section");
+        assert!(html.contains("class=\"k k2\">图1 · 五维属性"), "图1 标签在估分卡内");
+        // 图4 心情走势 + 掉干劲区间注记
+        assert!(html.contains("图4 · 心情走势"));
+        assert!(html.contains("掉干劲区间：t30（5→4，t77 恢复）"), "心情降低区间文字解释");
         // 单一两栏网格 + 叙述卡化 + 终局估分措辞
         assert!(html.contains("cols"), "两栏布局 class");
         assert!(html.contains("终局估分 62500（UA9）"), "头部措辞＝终局估分");

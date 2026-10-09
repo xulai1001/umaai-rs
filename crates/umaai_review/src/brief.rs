@@ -1093,6 +1093,7 @@ mod tests {
         }
         assert!(md.contains("| 终局 | 1200 | 900 | 700 | 700 | 1100 |"), "五维终局行应入表");
         assert!(md.contains("触顶维（真实值达上限）：速（1200/1200）"));
+        assert!(md.contains("属性低不等于「该练该维」"), "§1.1 应带补维口径注记（低维不给练该维建议）");
         assert!(md.contains("继承块不可用"), "无继承块应降级说明");
         assert!(md.contains("自由比赛区间：无"), "无自由比赛应如实说明");
         assert!(md.contains("无偏离"), "无偏离应说明");
