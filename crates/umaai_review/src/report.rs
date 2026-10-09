@@ -2,15 +2,18 @@
 //!
 //! - **四图**：自绘 SVG（复用 `umaai::plot::svg::Svg` 构建器，零 JS、零第三方
 //!   图表库），作为模板变量经 `|safe` 注入
-//!   - 图1 五维属性（终局真实值横条 + 上限竖线，技能 PT 加粗列出；**置于头部
-//!     「终局估分」卡内**——用户 2026-10-09 拍板）
-//!   - 图2 训练分布（年份纵轴 3 横条分段堆叠，比赛与其他合并）
-//!   - 图3 运气走势（累计折线左轴 + 回合合计Δ柱右轴 + 关注点编号与图下注记，
+//!   - 图1 五维属性（终局真实值横条 + 上限竖线，技能 PT 加粗列出；**独立图卡、
+//!     居头部「终局估分」卡右侧**——用户 2026-10-09 拍板）
+//!   - 图2 运气走势（累计折线左轴 + 回合合计Δ柱右轴 + 关注点编号与图下注记，
 //!     年度底色区，伪波动柱置灰）
+//!   - 图3 训练分布（年份纵轴 3 横条分段堆叠，比赛与其他合并）
 //!   - 图4 心情走势（干劲 1-5 回合末阶梯折线 + 掉落 / 回升圆点标记，图下 `.note`
 //!     给掉干劲区间的文字解释）
 //! - **单一两栏网格**（叙述卡化 + 双卡合一 + 图表合并卡；奇数末格跨栏对齐；
-//!   口径速览已删——判据全文在 digest.context.criteria）：minijinja 外置模板
+//!   口径速览已删——判据全文在 digest.context.criteria）：行序为
+//!   估分卡(含总结)|图1 → 图2|叙述卡(总体+走势+检查项) → 图3|图4 → 分身|继承
+//!   （**总结入估分卡、总体并入走势文字卡首段、图1 独立图卡居估分卡右侧**——
+//!   用户 2026-10-09 拍板）：minijinja 外置模板
 //!   （`templates/report.html.j2`，运行时从文件加载，**改样式不重编译**）；
 //!   附录数据（赛程 / 覆盖）不在报告落表——交给 SKILL 层处理成描述性文字后
 //!   再考虑显示形式（用户拍板）
@@ -36,7 +39,7 @@ use crate::{
     timeline::TimelineRow
 };
 
-/// 五维名与折线配色（图1 / 图4 训练位一致）
+/// 五维名与条形配色（图1 五维条 / 图3 训练分段同色）
 const ATTRS: [(&str, &str); 5] = [
     ("速", "#1f77b4"),
     ("耐", "#ff7f0e"),
@@ -262,12 +265,12 @@ fn chart_status(tl: &[TimelineRow]) -> String {
     svg.render()
 }
 
-// ======================= 图3：运气分双轴（含关注点） =======================
+// ======================= 图2：运气分双轴（含关注点） =======================
 
 /// 圆圈数字（关注点编号 ①-⑥；MS YaHei / Noto 均覆盖）
 const CIRCLED: [&str; 6] = ["①", "②", "③", "④", "⑤", "⑥"];
 
-/// 图3：累计运气分折线（左轴）+ 回合合计Δ柱（右轴）+ **关注点编号** + 正 / 负底色带
+/// 图2：累计运气分折线（左轴）+ 回合合计Δ柱（右轴）+ **关注点编号** + 正 / 负底色带
 ///
 /// 用户 2026-10-08 拍板：图表改两栏宽度（470）；图上标「关注点」编号（top_gain /
 /// top_loss 各取前 3、按回合去重，≤6 个）——编号的解释（回合 + Δ + 性质）由
@@ -275,7 +278,7 @@ const CIRCLED: [&str; 6] = ["①", "②", "③", "④", "⑤", "⑥"];
 /// 负浅红，零点插值切开、同色合并）。伪波动柱置灰（§8、§6.2）。
 fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
     if luck.series.is_empty() {
-        return note_svg("图3 运气走势：无决策数据");
+        return note_svg("图2 运气走势：无决策数据");
     }
     let mut delta_by_turn: BTreeMap<u32, f64> = BTreeMap::new();
     for r in dec {
@@ -423,7 +426,7 @@ fn chart_luck(luck: &LuckBlock, dec: &[DecRow]) -> String {
     svg.render()
 }
 
-// ======================= 图2：行动分年累积 =======================
+// ======================= 图3：行动分年累积 =======================
 
 /// 行动分段配色（训练按维展开；「X训练·继承混合」并入对应训练；友人出行并入
 /// 出行；**比赛与治病 / 剧本 / 未知合并**——用户 2026-10-08 拍板）
@@ -468,12 +471,12 @@ fn year_idx(turn: u32) -> usize {
 
 const YEAR_LABELS: [&str; 3] = ["第1年", "第2年", "第3年(含超拉)"];
 
-/// 图2：实际执行行动分年累积（年份纵轴 3 横条分段堆叠）+ 第 4 行「吃面后训练选择」
+/// 图3：实际执行行动分年累积（年份纵轴 3 横条分段堆叠）+ 第 4 行「吃面后训练选择」
 /// （全程含超拉期：当回合 ramen_select 决策选了「吃面」且实际训练了；只看选了什么
 /// 训练、不看吃了什么面——用户 2026-10-08 拍板）
 fn chart_actions(exec: &[ExecRow], dec: &[DecRow]) -> String {
     if exec.is_empty() {
-        return note_svg("图2 训练分布：无执行推断数据");
+        return note_svg("图3 训练分布：无执行推断数据");
     }
     let mut counts = [[0u32; 3]; SEGMENTS.len()];
     for r in exec {
@@ -660,7 +663,7 @@ fn chart_motivation(states: &BTreeMap<u32, i32>) -> String {
             svg.circle(x(t_cur as f64), y(m_cur as f64), 3.5, "#16a34a", 1.0);
         }
     }
-    // 横轴刻度（每 12 回合，与图3 一致）
+    // 横轴刻度（每 12 回合，与图2 一致）
     let mut t = 0.0;
     while t <= t1 {
         svg.line(x(t), top + ph, x(t), top + ph + 4.0, "#555", 0.8);
@@ -922,17 +925,17 @@ mod tests {
         let d = test_digest();
         let c = build_charts(&d);
         println!("图1 {} 字节 / 图2 {} / 图3 {} / 图4 {}",
-            c.status.len(), c.actions.len(), c.luck.len(), c.motivation.len());
+            c.status.len(), c.luck.len(), c.actions.len(), c.motivation.len());
         // 图1 属性-上限：五维条 + 上限竖线 + 数值 + 技能PT 行
         assert!(c.status.contains("<svg") && c.status.contains("五维属性"));
         assert!(c.status.contains("2200") && !c.status.contains("3200/"), "数值只列显示值");
         assert!(c.status.contains("技能PT"));
-        // 图2 行动分年累积：年段标签 + 分段图例 + 第 4 行「吃面后训练」
+        // 图3 行动分年累积：年段标签 + 分段图例 + 第 4 行「吃面后训练」
         assert!(c.actions.contains("训练分布"));
         assert!(c.actions.contains("第1年") && c.actions.contains("第3年(含超拉)"));
         assert!(c.actions.contains("速训练") && c.actions.contains("比赛/其他"));
         assert!(c.actions.contains("吃面后训练"), "第 4 行：吃面后训练选择");
-        // 图3 运气分双轴：关注点编号圆圈 + 正 / 负底色带；图内不注记（解释归走势文字）
+        // 图2 运气分双轴：关注点编号圆圈 + 正 / 负底色带；图内不注记（解释归走势文字）
         assert!(c.luck.contains("运气走势") && c.luck.contains("<polyline"));
         assert!(c.luck.contains("①"), "关注点编号标记");
         assert!(!c.luck.contains("t30 -500"), "图内不再逐条注记");
@@ -998,17 +1001,25 @@ mod tests {
         let html = fs::read_to_string(&out)?;
         println!("report.html {} 字节", html.len());
         assert!(html.contains("<!DOCTYPE html>"));
-        assert!(html.contains("单局复盘 · game6234"));
+        assert!(html.contains("吹波糖 育成复盘（#game6234）"), "主标题＝马娘名 育成复盘（#game编号）");
         assert!(html.contains("吹波糖"));
         assert!(html.contains("UA9"));
         assert!(html.contains("<svg"), "四图 SVG 应经 |safe 注入");
         assert!(html.contains("图1") && html.contains("图2") && html.contains("图3") && html.contains("图4"));
-        // 图1 已移入头部「终局估分」卡（不再有独立 section；用户 2026-10-09 拍板）
-        assert!(!html.contains("<section><h2>图1"), "图1 不再是独立 section");
-        assert!(html.contains("class=\"k k2\">图1 · 五维属性"), "图1 标签在估分卡内");
+        // 图1 独立图卡居估分卡右侧；总结入估分卡、总体入走势文字卡首段（用户 2026-10-09 拍板）
+        assert!(html.contains("<section><h2>图1 · 五维属性</h2>"), "图1 为独立图卡");
         // 图4 心情走势 + 掉干劲区间注记
         assert!(html.contains("图4 · 心情走势"));
         assert!(html.contains("掉干劲区间：t30（5→4，t77 恢复）"), "心情降低区间文字解释");
+        // 行序：估分卡(总结)|图1 → 图2|叙述卡(总体+走势+检查项) → 图3|图4
+        let pos = |s: &str| html.find(s).unwrap_or(usize::MAX);
+        assert!(pos("<div class=\"k k2\">总结") < pos("<section><h2>图1"), "总结在估分卡内（先于图1 卡）");
+        assert!(pos("<section><h2>图1") < pos("<section><h2>图2"), "图1 紧随估分卡（同排右格）");
+        assert!(pos("<div class=\"k\">总体") < pos("<div class=\"k k2\">运气走势"), "总体为走势文字卡首段");
+        assert!(pos("图2 · 运气走势") < pos("图3 · 训练分布"), "图2 在图3 之前");
+        assert!(pos("图2 · 运气走势") < pos("运气走势</div>"), "走势叙述卡与图2 同排");
+        assert!(pos("运气走势</div>") < pos("图3 · 训练分布"), "叙述卡在图3 之前");
+        assert!(pos("图3 · 训练分布") < pos("图4 · 心情走势"), "图3 在图4 之前");
         // 单一两栏网格 + 叙述卡化 + 终局估分措辞
         assert!(html.contains("cols"), "两栏布局 class");
         assert!(html.contains("终局估分 62500（UA9）"), "头部措辞＝终局估分");

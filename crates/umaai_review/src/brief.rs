@@ -579,9 +579,9 @@ fn fill_other_sources(v: &mut BriefView, d: &Digest, states: &BTreeMap<u32, Turn
             "超级拉面分身（turn >= {}）：新增 {} / 落得意位 {} / 被训练 {} / 随机 {} / 规则 {}",
             SUPER_RAMEN_START, b.new_clones, b.rainbow_clones, b.trained_clones, b.rainbow_luck, b.rainbow_strategy
         );
-        // 地区分身逐次彩圈明细（只含彩圈；构造在 clones.rs，report.html 共用）
+        // 地区分身逐次彩圈明细（只含彩圈；构造在 clones.rs，exec/dec 供没吃到行的鉴别）
         let deck_names: Vec<String> = d.meta.deck.iter().map(|c| c.name.clone()).collect();
-        v.region_rows = cl.region_detail_rows(&deck_names);
+        v.region_rows = cl.region_detail_rows(&deck_names, &d.execution, &d.decisions);
     }
 
     // 5.4 赛程

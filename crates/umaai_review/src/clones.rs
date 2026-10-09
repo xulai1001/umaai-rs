@@ -31,7 +31,12 @@ use serde::Serialize;
 
 use umaai::protocol::ramen::GameStatusRamen;
 
-use crate::{checks::SUPER_RAMEN_START, execution::ExecutionResult, pack::SnapEntry};
+use crate::{
+    checks::SUPER_RAMEN_START,
+    decisions::DecRow,
+    execution::{ExecRow, ExecutionResult},
+    pack::SnapEntry
+};
 
 /// 五维属性名（训练位索引同序）
 const ATTR_NAMES: [&str; 5] = ["速", "耐", "力", "根", "智"];
@@ -115,7 +120,13 @@ impl ClonesBlock {
     ///
     /// 行数应等于 `region.rainbow_clones`，对不上说明取数漏了（见 pitfalls 第 9 条）。
     /// `deck_names`：卡组卡名（`meta.deck[].name`，按卡索引取；缺则回退 `card{N}`）。
-    pub fn region_detail_rows(&self, deck_names: &[String]) -> Vec<CloneDetailRow> {
+    /// `exec` / `dec`：执行推断与决策行——**没吃到的行用它们做鉴别**（见 [`miss_pick_note`]）。
+    pub fn region_detail_rows(
+        &self,
+        deck_names: &[String],
+        exec: &[ExecRow],
+        dec: &[DecRow]
+    ) -> Vec<CloneDetailRow> {
         let mut out = Vec::new();
         for ct in &self.region_per_turn {
             for c in &ct.cards {
@@ -141,7 +152,9 @@ impl ClonesBlock {
                 };
                 let (used, pick) = match c.used {
                     Some(true) => ("是", format!("玩家当回合选了{train}训练，吃到了这个彩圈")),
-                    Some(false) => ("否", format!("玩家当回合没选{train}训练，没吃到")),
+                    Some(false) => {
+                        ("否", miss_pick_note(ct.turn, &c.rainbow_positions, exec, dec, &train))
+                    }
                     None => ("—", "当回合训练无法判定".to_string()),
                 };
                 out.push(CloneDetailRow {
@@ -158,6 +171,58 @@ impl ClonesBlock {
             }
         }
         out
+    }
+}
+
+/// 「彩圈没吃到」的原因鉴别（用户 2026-10-09 拍板）
+///
+/// 没吃到 ≠ 失误——当回合可能选了**更强的训练**。取当回合 Train 决策的候选评分
+/// 对比（候选评分已含分身加成——AI 派发时快照带分身人头）：
+/// - 实际动作候选评分 ≥ 彩圈位训练候选 → **选了更强的训练，正常取舍**；
+/// - 彩圈位训练评分更高却没选 → 真错过（叙事可点出）；
+/// - 彩圈位训练不在候选表 → 不具竞争力，按推荐取舍同样正常；
+/// - 实际动作候选外（无评分可比）→ 降级为只报事实。
+fn miss_pick_note(
+    turn: u32,
+    rainbow_positions: &[u32],
+    exec: &[ExecRow],
+    dec: &[DecRow],
+    train: &str
+) -> String {
+    let Some(row) = exec.iter().find(|r| r.turn == turn) else {
+        return format!("玩家当回合没选{train}训练，没吃到");
+    };
+    let actual = row.actual_action.as_str();
+    // 当回合 Train 决策的候选（`train` 帧是最终执行段；「·继承混合」后缀按前缀匹配）
+    let cands = dec
+        .iter()
+        .find(|r| r.turn == turn && r.decision_kind == "train")
+        .map(|r| r.candidates.as_slice())
+        .unwrap_or(&[]);
+    let act = cands.iter().find(|c| actual.starts_with(&c.desc));
+    // 彩圈位训练候选（多命中取最高分）
+    let rb = rainbow_positions
+        .iter()
+        .filter_map(|&p| {
+            let name = TRAIN_POS.get(p as usize).copied().unwrap_or("?");
+            cands.iter().find(|c| c.desc == format!("{name}训练")).and_then(|c| c.score)
+        })
+        .fold(None::<f64>, |a, b| Some(a.map_or(b, |a: f64| a.max(b))));
+    match (act.and_then(|c| c.score), rb) {
+        (Some(sa), Some(sr)) if sa >= sr => format!(
+            "玩家当回合选了{}（候选评分领先{train}训练 {} 分），彩圈没吃到属正常取舍",
+            act.expect("评分分支 act 必在").desc,
+            (sa - sr).round() as i64
+        ),
+        (Some(sa), Some(sr)) => format!(
+            "玩家当回合没选{train}训练（其候选评分领先 {} 分），没吃到",
+            (sr - sa).round() as i64
+        ),
+        (Some(_), None) => format!(
+            "玩家当回合选了{}（{train}训练不在当回合候选表），彩圈没吃到属正常取舍",
+            act.expect("评分分支 act 必在").desc
+        ),
+        (None, _) => format!("玩家当回合选了{actual}（候选外），没吃到")
     }
 }
 
@@ -437,5 +502,132 @@ mod tests {
         assert_eq!(b.region.new_clones, 0);
         let none = build(&snaps, None, &Default::default());
         assert!(none.is_none(), "card_types 缺失 → 整块跳过");
+    }
+
+    /// 「彩圈没吃到」的原因鉴别（用户 2026-10-09 拍板）：候选评分对比
+    /// 选了更强训练 = 正常取舍；彩圈位训练评分更高却没选 = 真错过；
+    /// 彩圈位训练不在候选表 = 不具竞争力；候选外 / 无行 → 降级只报事实
+    #[test]
+    fn test_region_detail_rows_miss_verdict() {
+        use crate::decisions::{Cand, Chosen};
+
+        fn card(turn: u32, pos: u32, used: Option<bool>) -> CloneTurn {
+            CloneTurn {
+                turn,
+                cards: vec![CloneCard {
+                    card: 3,
+                    positions: vec![pos],
+                    rainbow_positions: vec![pos],
+                    origin: Some("luck".to_string()),
+                    used
+                }]
+            }
+        }
+        let mut block = ClonesBlock::default();
+        block.region_per_turn = vec![
+            card(39, 1, Some(false)), // 耐位；实际选力（力评分领先 978）→ 正常取舍
+            card(58, 0, Some(false)), // 速位；实际选耐，但速评分领先 729 → 真错过
+            card(70, 2, Some(false)), // 力位；力不在候选表 → 正常取舍
+            card(75, 4, Some(false)), // 智位；实际动作候选外 → 降级
+            card(80, 0, None)         // used 无法判定
+        ];
+        let exec = vec![
+            crate::execution::ExecRow {
+                turn: 39,
+                stage: "Train".into(),
+                ai_choice: "力训练".into(),
+                actual_action: "力训练".into(),
+                matches: Some(true),
+                evidence: Default::default(),
+                alt_candidate: None
+            },
+            crate::execution::ExecRow {
+                turn: 58,
+                stage: "Train".into(),
+                ai_choice: "速训练".into(),
+                actual_action: "耐训练".into(),
+                matches: Some(false),
+                evidence: Default::default(),
+                alt_candidate: None
+            },
+            crate::execution::ExecRow {
+                turn: 70,
+                stage: "Train".into(),
+                ai_choice: "速训练".into(),
+                actual_action: "速训练".into(),
+                matches: Some(true),
+                evidence: Default::default(),
+                alt_candidate: None
+            },
+            crate::execution::ExecRow {
+                turn: 75,
+                stage: "Train".into(),
+                ai_choice: "耐训练".into(),
+                actual_action: "休息".into(),
+                matches: Some(false),
+                evidence: Default::default(),
+                alt_candidate: None
+            }
+        ];
+        let dec = |turn: u32, cands: Vec<Cand>| DecRow {
+            file: format!("f{turn}.json"),
+            turn,
+            seq: 0,
+            stage: "Train".into(),
+            decision_kind: "train".into(),
+            candidates: cands,
+            chosen: Chosen::default(),
+            t_n_raw: None,
+            t_n_display: None,
+            total_luck: None,
+            turn_delta: None,
+            chain_len: 1,
+            outcome: "calc".into(),
+            reason: String::new(),
+            step: 0
+        };
+        let cand = |rank: usize, desc: &str, score: f64| Cand {
+            rank,
+            desc: desc.into(),
+            score: Some(score),
+            n: None,
+            gap_to_best: None
+        };
+        let dec = vec![
+            dec(39, vec![cand(1, "力训练", 66636.5), cand(3, "耐训练", 65658.2)]),
+            dec(58, vec![cand(1, "速训练", 68046.2), cand(2, "耐训练", 67317.2)]),
+            dec(70, vec![cand(1, "速训练", 67000.0), cand(2, "耐训练", 66000.0)])
+        ];
+        let deck: Vec<String> = (0..6).map(|i| format!("卡{i}")).collect();
+        let rows = block.region_detail_rows(&deck, &exec, &dec);
+        println!("{rows:#?}");
+        assert_eq!(rows.len(), 5);
+        assert!(
+            rows[0].text.contains("选了力训练（候选评分领先耐训练 978 分）"),
+            "选了更强训练 → 正常取舍：{}",
+            rows[0].text
+        );
+        assert!(rows[0].text.contains("属正常取舍"));
+        assert!(
+            rows[1].text.contains("没选速训练（其候选评分领先 729 分），没吃到"),
+            "彩圈位评分更高却没选 → 真错过：{}",
+            rows[1].text
+        );
+        assert!(
+            rows[2].text.contains("选了速训练（力训练不在当回合候选表）"),
+            "彩圈位训练不在候选表 → 正常取舍：{}",
+            rows[2].text
+        );
+        assert!(
+            rows[3].text.contains("选了休息（候选外），没吃到"),
+            "候选外 → 降级只报事实：{}",
+            rows[3].text
+        );
+        assert!(rows[4].text.contains("当回合训练无法判定"), "used 缺失原措辞保留");
+        // 吃到的行措辞不变
+        let mut b2 = ClonesBlock::default();
+        b2.region_per_turn = vec![card(49, 0, Some(true))];
+        let rows2 = b2.region_detail_rows(&deck, &exec, &dec);
+        assert!(rows2[0].text.contains("选了速训练，吃到了这个彩圈"));
     }
 }

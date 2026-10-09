@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>单局复盘 game{{ digest.meta.game }} · umaai_review</title>
+<title>{{ digest.meta.uma_name }} 育成复盘 #game{{ digest.meta.game }} · umaai_review</title>
 <style>
   :root { --fg:#1f2937; --muted:#6b7280; --line:#e5e7eb; --bg:#f6f8fb; --card:#ffffff; }
   * { box-sizing:border-box; }
@@ -59,7 +59,7 @@
 </head>
 <body><div class="wrap">
 
-<h1>单局复盘 · game{{ digest.meta.game }}</h1>
+<h1>{{ digest.meta.uma_name }} 育成复盘（#game{{ digest.meta.game }}）</h1>
 
 {% set span_clones = digest.clones and not digest.inherit %}
 {% set span_inherit = digest.inherit and not digest.clones %}
@@ -71,24 +71,25 @@
     <div class="chips">
       {% for c in digest.meta.deck %}{% set tc = "#94a3b8" %}{% if c.card_type == 0 %}{% set tc = "#1f77b4" %}{% elif c.card_type == 1 %}{% set tc = "#ff7f0e" %}{% elif c.card_type == 2 %}{% set tc = "#2ca02c" %}{% elif c.card_type == 3 %}{% set tc = "#d62728" %}{% elif c.card_type == 4 %}{% set tc = "#9467bd" %}{% elif c.card_type == 5 %}{% set tc = "#ec4899" %}{% elif c.card_type == 6 %}{% set tc = "#06b6d4" %}{% endif %}<span class="chip" style="border-left-color:{{ tc }}">{{ c.name }} · {{ c.limit_break }}破</span>{% endfor %}
     </div>
-    <div class="k k2">图1 · 五维属性</div>
-    {{ chart_status | safe }}
-    <div class="note">逐年训练次数 / 五维净增 / 运气归属见同目录 brief.md §1.2</div>
+    <div class="k k2">总结</div>
+{% if narrative.summary %}{{ narrative.summary | safe }}{% else %}<!-- NARRATIVE:summary -->{% endif %}
     <div class="sub2">快照 {{ digest.meta.snapshots }} · 决策行 {{ digest.meta.decision_rows }} · 来源 {{ digest.meta.final_source }}</div>
   </div>
+  <section><h2>图1 · 五维属性</h2>{{ chart_status | safe }}
+  <div class="note">逐年训练次数 / 五维净增 / 运气归属见同目录 brief.md §1.2</div>
+  </section>
+  <!-- 行序（用户 2026-10-09 拍板，图号按显示顺序）：估分卡(含总结)|图1 → 图2|叙述卡(总体+走势+检查项) → 图3|图4 → 分身|继承 -->
+  <section><h2>图2 · 运气走势</h2>{{ chart_luck | safe }}</section>
   <div class="card"><div class="k">总体</div>
 {% if narrative.overview %}{{ narrative.overview | safe }}{% else %}<!-- NARRATIVE:overview -->{% endif %}
-  <div class="k k2">总结</div>
-{% if narrative.summary %}{{ narrative.summary | safe }}{% else %}<!-- NARRATIVE:summary -->{% endif %}</div>
-  <section><h2>图2 · 训练分布</h2>{{ chart_actions | safe }}</section>
-  <section><h2>图3 · 运气走势</h2>{{ chart_luck | safe }}</section>
-  <section><h2>图4 · 心情走势</h2>{{ chart_motivation | safe }}
-  <div class="note">{{ motivation_note }}</div>
-  </section>
-  <div class="card"><div class="k">运气走势</div>
+  <div class="k k2">运气走势</div>
 {% if narrative.luck_trend %}{{ narrative.luck_trend | safe }}{% else %}<!-- NARRATIVE:luck_trend -->{% endif %}
   <div class="k k2">检查项</div>
 {% if narrative.findings %}{{ narrative.findings | safe }}{% else %}<!-- NARRATIVE:findings -->{% endif %}</div>
+  <section><h2>图3 · 训练分布</h2>{{ chart_actions | safe }}</section>
+  <section><h2>图4 · 心情走势</h2>{{ chart_motivation | safe }}
+  <div class="note">{{ motivation_note }}</div>
+  </section>
 {% if digest.clones %}
   <section{% if span_clones %} class="span2"{% endif %}>
   <h2>分身彩圈</h2>
